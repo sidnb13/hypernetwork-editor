@@ -1,7 +1,9 @@
---index-url https://download.pytorch.org/whl/cu118
-
 transformers
-torch
 datasets
 pandas
 matplotlib
+ipykernel
+jupyter
+
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch
