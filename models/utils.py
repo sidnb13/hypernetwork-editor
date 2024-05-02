@@ -1,4 +1,28 @@
 import contextlib
+from dataclasses import dataclass
+from typing import Optional
+
+import torch
+from transformers import PretrainedConfig
+from transformers.modeling_outputs import BaseModelOutput
+
+
+class EditorConfig(PretrainedConfig):
+    edit_channel_width_factor: int = 2
+    chop_editor_at_layer: int = -1
+    num_editing_heads: int = 32
+    use_layerwise_embeddings: bool = True
+    edit_dampening_factor: float = 0.001
+    kill_token_zero: bool = False
+
+
+@dataclass
+class EditorModelOutput(BaseModelOutput):
+    logits: torch.Tensor
+    target_hidden_states = Optional[torch.Tensor] = None
+    edited_hidden_states = Optional[torch.Tensor] = None
+    edit_vectors = Optional[torch.Tensor] = None
+    editor_attention = Optional[torch.Tensor] = None
 
 
 @contextlib.contextmanager
