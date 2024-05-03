@@ -269,7 +269,7 @@ class GPT2Editor(nn.Module):
         if target_hidden_states is None:
             target_hidden_states = torch.stack(
                 self._run_target_model_for_encoded_hidden_states(
-                    target_input_ids.to("cuda")
+                    target_input_ids
                 ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
                 dim=2,
             )
@@ -314,7 +314,7 @@ class GPT2Editor(nn.Module):
                 )
 
             editor_output = self.editor_model(
-                editor_input_ids.to("cuda"),
+                editor_input_ids,
                 encoder_hidden_states=collapsed_target_hidden_states,
                 output_attentions=output_editor_attention,
             )
@@ -373,7 +373,7 @@ class GPT2Editor(nn.Module):
             # THIS IS THE LINE WHERE THE MODEL IS CALLED (AND THE EDITOR IS CALLED AT
             # THE END OF `layer` AS A SIDE EFFECT)
             target_result = self.target_model(
-                target_input_ids.to("cuda"),
+                target_input_ids,
                 output_hidden_states=output_edited_hidden_states,
             )
 

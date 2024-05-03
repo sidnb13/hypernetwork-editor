@@ -3,6 +3,7 @@ datasets
 pandas
 matplotlib
 ipykernel
+hydra-core
 jupyter
 
 --extra-index-url https://download.pytorch.org/whl/cu118
