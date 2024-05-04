@@ -33,7 +33,7 @@ class DatasetCache:
             def get_pruned_dict(obj):
                 prune = {}
                 for k, v in obj.items():
-                    if k in self.exclude_argnames:
+                    if any(x in k for x in self.exclude_argnames):
                         continue
                     if isinstance(v, (dict, DictConfig)):
                         prune[k] = get_pruned_dict(dict(v))
@@ -66,12 +66,16 @@ class DatasetCache:
         return wrapper
 
 
-@DatasetCache(exclude_argnames=["n_examples", "test_split", "val_split", "seed"])
+@DatasetCache(
+    exclude_argnames=["n_examples", "test_split", "val_split", "seed", "batch_size"]
+)
 def load_nouns(config: DictConfig):
     pass
 
 
-@DatasetCache(exclude_argnames=["n_examples", "test_split", "val_split", "seed"])
+@DatasetCache(
+    exclude_argnames=["n_examples", "test_split", "val_split", "seed", "batch_size"]
+)
 def load_wikipedia(config: DictConfig):
     assert config.task.name == "wikipedia", "task must be 'wikipedia'"
 

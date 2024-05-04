@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 from dataclasses import dataclass
 from typing import Optional
@@ -51,6 +53,9 @@ def assign_layer_indices(model):
     Assigns a custom attribute 'layer_index' to each transformer layer in the GPT-2 model.
     This function iterates over the transformer blocks and assigns an index to each.
     """
-    model.transformer.wte.layer_index = 0
-    for i, layer in enumerate(model.transformer.h):
-        layer.layer_index = i + 1
+    if "gpt2" in model.config.name_or_path:
+        model.transformer.wte.layer_index = 0
+        for i, layer in enumerate(model.transformer.h):
+            layer.layer_index = i + 1
+    else:
+        raise NotImplementedError

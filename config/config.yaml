@@ -1,0 +1,36 @@
+model: gpt2
+task: wikipedia
+
+train:
+  lr: 1e-5
+  steps: -1
+  warmup_steps: 0.1
+  epochs: 1
+  train_batch_size: 32
+  validation_batch_size: 16
+  scheduler: null
+  optim: AdamW
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  max_grad_norm: 1.0
+
+  # edit specific hparams
+  lambda: 0
+  lambda_testing_penalty: 0
+  loss_mode: kl # or ce
+
+  # checkpointing, evaluation, and logging
+  log_interval: 10
+  eval_interval: 100
+  save_interval: 500
+  do_save: true
+
+wandb:
+  project: none
+  name: none
+  entity: none
+  tags: []
+  group: none
