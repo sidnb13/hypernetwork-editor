@@ -10,7 +10,7 @@ import torch.distributed as dist
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from helpers import get_tokenizer
+from helpers import ROOT_DIR, get_tokenizer
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,10 +20,10 @@ class DatasetCache:
     def __init__(
         self,
         exclude_argnames: List[str],
-        cache_dir: str | os.PathLike = "assets/data/cache",
+        cache_dir: str | os.PathLike = None,
     ) -> None:
         self.exclude_argnames = exclude_argnames
-        self.cache_dir = cache_dir
+        self.cache_dir = cache_dir or os.path.join(ROOT_DIR, "assets/data/cache")
 
     def __call__(self, func) -> Any:
         def wrapper(*args, **kwargs):

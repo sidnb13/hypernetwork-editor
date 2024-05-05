@@ -10,6 +10,7 @@ from transformers.modeling_outputs import BaseModelOutput
 
 
 class EditorConfig(PretrainedConfig):
+    name_or_path: str = "gpt2"
     edit_channel_width_factor: int = 2
     chop_editor_at_layer: int = -1
     num_editing_heads: int = 32
@@ -20,11 +21,11 @@ class EditorConfig(PretrainedConfig):
 
 @dataclass
 class EditorModelOutput(BaseModelOutput):
-    logits: torch.Tensor
-    target_hidden_states = Optional[torch.Tensor] = None
-    edited_hidden_states = Optional[torch.Tensor] = None
-    edit_vectors = Optional[torch.Tensor] = None
-    editor_attention = Optional[torch.Tensor] = None
+    logits: Optional[torch.Tensor] = None
+    target_hidden_states: Optional[torch.Tensor] = None
+    edited_hidden_states: Optional[torch.Tensor] = None
+    edit_vectors: Optional[torch.Tensor] = None
+    editor_attention: Optional[torch.Tensor] = None
 
 
 @contextlib.contextmanager

@@ -2,8 +2,18 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, GPT2Config, GPT2LMHeadModel, GPT2Model
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2FlashAttention2
+from transformers import (
+    AutoModelForCausalLM,
+    GPT2Config,
+    GPT2LMHeadModel,
+    GPT2Model,
+    PreTrainedModel,
+)
+from transformers.models.gpt2.modeling_gpt2 import (
+    GPT2Attention,
+    GPT2Block,
+    GPT2FlashAttention2,
+)
 from transformers.pytorch_utils import Conv1D
 
 from models.utils import EditorModelOutput
@@ -83,8 +93,7 @@ class EditorCrossAttention(GPT2Attention):
         Splits hidden_size dim into attn_head_size and num_heads
         """
         new_shape = tensor.size()[:-1] + (self.num_heads, self.head_dim)
-        tensor = tensor.view(new_shape)
-        return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
+        return tensor.view(new_shape)
 
     def forward(
         self,
@@ -103,19 +112,28 @@ class EditorCrossAttention(GPT2Attention):
                     "If class is used as cross attention, the weights `q_attn` have to be defined. "
                     "Please make sure to instantiate class with `GPT2Attention(..., is_cross_attention=True)`."
                 )
-            query = self.q_attn(hidden_states)
-
+            query = self.q_attn(encoder_hidden_states)
             # We only take the last position hidden state from the editor
-            key, value = self.c_attn(encoder_hidden_states).split(
-                self.split_size, dim=2
+            key, value = self.c_attn(hidden_states[:, -1, :]).split(
+                self.split_size, dim=-1
             )
             attention_mask = encoder_attention_mask
         else:
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
 
-        query = self._split_heads(query)
-        key = self._split_heads(key)
-        value = self._split_heads(value)
+        split_query = self._split_heads(query)
+        bsz, _, num_heads, head_dim = split_query.size()
+
+        # (bsz, seq_len, num_heads, head_dim) -> (bsz * num_heads, seq_len, head_dim)
+        query = split_query.permute(0, 2, 1, 3).reshape(bsz * num_heads, -1, head_dim)
+        key = (
+            self._split_heads(key).unsqueeze(-2).reshape(bsz * num_heads, -1, head_dim)
+        )
+        value = (
+            self._split_heads(value)
+            .unsqueeze(-2)
+            .reshape(bsz * num_heads, -1, head_dim)
+        )
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -135,7 +153,8 @@ class EditorCrossAttention(GPT2Attention):
             attn_output, attn_weights = self._attn(
                 query, key, value, attention_mask, head_mask
             )
-
+        # unmerge the head and batch dimension
+        attn_output = attn_output.reshape(bsz, num_heads, -1, head_dim)
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
@@ -157,19 +176,27 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
     def __init__(self, config: GPT2EditorConfig):
         super().__init__(config)
         self.transformer = GPT2Model(config)
+        # only LM head gets special attention
         if config._attn_implementation == "flash_attention_2":
             self.lm_head = EditorCrossFlashAttention2(
                 config=config, layer_idx=config.chop_editor_at_layer
             )
+            _attention_cls = GPT2FlashAttention2
         else:
             self.lm_head = EditorCrossAttention(
                 config=config, layer_idx=config.chop_editor_at_layer
             )
+            _attention_cls = GPT2Attention
 
         # prune layers and add cross attn heads
-        self.transformer.layers = self.transformer.layers[: config.chop_editor_at_layer]
-        for i, layer in enumerate(self.transformer.layers):
-            layer.attn = EditorCrossAttention(config=config, layer_idx=i)
+        self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
+        for i, layer in enumerate(self.transformer.h):
+            layer.crossattention = _attention_cls(
+                config=config, layer_idx=i, is_cross_attention=True
+            )
+            layer.ln_cross_attn = nn.LayerNorm(
+                config.hidden_size, eps=config.layer_norm_epsilon
+            )
 
         # Model parallel
         self.model_parallel = False
@@ -224,39 +251,52 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         reverse_attention_output = self.lm_head(
-            hidden_states, encoder_hidden_states, output_attentions=output_attentions
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            output_attentions=output_attentions,
         )
 
+        # (output, present[,attentions])
         return reverse_attention_output
 
 
-@torch.compile
-class GPT2Editor(nn.Module):
+class GPT2Editor(PreTrainedModel):
     def __init__(self, config: GPT2EditorConfig):
-        super().__init__()
-
-        self.config = config
+        super().__init__(config)
         self.hypernetwork = GPT2EditorHypernetwork(config)
         self.target_model = AutoModelForCausalLM.from_pretrained(config.name_or_path)
         assign_layer_indices(self.target_model)
 
         if config.use_layerwise_embeddings:
             # extra layer is cross-attn in the lm_head
-            self.layerwise_embeddings = nn.Embedding(config.n_layer + 1, config.n_embd)
+            self.layerwise_embeddings = nn.Parameter(
+                torch.zeros(config.n_layer + 1, config.n_embd), requires_grad=True
+            )
+            self.layerwise_embeddings.data.normal_(
+                mean=0.0, std=self.target_model.config.initializer_range
+            )
         else:
             self.layerwise_embeddings = None
 
     @torch.no_grad()
-    def _run_target_model_for_encoded_hidden_states(self, target_ids: torch.Tensor):
+    def _run_target_model_for_encoded_hidden_states(
+        self, target_input_ids: torch.Tensor, target_attention_mask: torch.Tensor
+    ):
         """Gets the hidden states from the target model, if necessary"""
-        outputs = self.target_model(target_ids, output_hidden_states=True)
+        outputs = self.target_model(
+            input_ids=target_input_ids,
+            attention_mask=target_attention_mask,
+            output_hidden_states=True,
+        )
         hidden_states = outputs.hidden_states
         return hidden_states
 
     def forward(
         self,
-        editor_input_ids: torch.Tensor,
-        target_input_ids: torch.Tensor,
+        editor_input_ids: torch.Tensor = None,
+        editor_attention_mask: torch.Tensor = None,
+        target_input_ids: torch.Tensor = None,
+        target_attention_mask: torch.Tensor = None,
         target_hidden_states: torch.Tensor = None,
         output_target_hidden_states: bool = False,
         output_edited_hidden_states: bool = False,
@@ -269,7 +309,7 @@ class GPT2Editor(nn.Module):
         if target_hidden_states is None:
             target_hidden_states = torch.stack(
                 self._run_target_model_for_encoded_hidden_states(
-                    target_input_ids
+                    target_input_ids, target_attention_mask
                 ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
                 dim=2,
             )
@@ -313,18 +353,18 @@ class GPT2Editor(nn.Module):
                     target_hidden_states.shape[3],
                 )
 
-            editor_output = self.editor_model(
-                editor_input_ids,
+            editor_output = self.hypernetwork(
+                input_ids=editor_input_ids,
+                attention_mask=editor_attention_mask,
                 encoder_hidden_states=collapsed_target_hidden_states,
                 output_attentions=output_editor_attention,
             )
+
             # Multiply the outputs by normalization factors
             if output_editor_attention:
-                temp_edit_vectors = editor_output[0]
-                # Might want to reshape this too but whatever
-                batch_editor_attention = editor_output[1]
+                temp_edit_vectors, batch_editor_attention = editor_output
             else:
-                temp_edit_vectors = editor_output
+                temp_edit_vectors = editor_output[0]
 
             # Renormalize to the scale of the target hidden states
             # and reshape to proper dimensions
@@ -332,7 +372,10 @@ class GPT2Editor(nn.Module):
                 self.config.edit_dampening_factor
                 * normalization_factors
                 * temp_edit_vectors.reshape(
-                    temp_edit_vectors.shape[0], stop_editing_index, 13, 768
+                    temp_edit_vectors.shape[0],
+                    -1,
+                    self.config.n_layer + 1,
+                    self.config.n_embd,
                 )
             )
 

@@ -4,6 +4,7 @@ pandas
 matplotlib
 ipykernel
 hydra-core
+wandb
 jupyter
 
 --extra-index-url https://download.pytorch.org/whl/cu118

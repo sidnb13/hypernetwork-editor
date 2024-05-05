@@ -1,8 +1,9 @@
 import itertools
-from typing import Dict, Union
+from typing import Dict
 
 import torch
 import torch.distributed as dist
+import wandb
 from omegaconf import DictConfig
 from torch import nn
 from torch.utils.data import DataLoader
@@ -14,8 +15,10 @@ from transformers import (
 )
 
 from helpers import slice_and_move_batch_for_device
+from logger import get_logger
 from models.gpt2 import GPT2Editor
-from models.utils import EditorModelOutput
+
+logger = get_logger(__name__)
 
 
 def train(
@@ -23,7 +26,20 @@ def train(
     editor: nn.Module,
     train_dataloader: DataLoader,
     validation_dataloader: DataLoader,
+    rank: int,
+    world_size: int,
 ):
+    # wandb setup
+    if config.wandb.enabled and rank == 0:
+        wandb.init(
+            project=config.wandb.project,
+            name=config.wandb.name,
+            config=dict(config),
+            entity=config.wandb.entity,
+            tags=config.wandb.tags,
+            group=config.wandb.group,
+        )
+
     opt = torch.optim.Adam(
         editor.parameters(),
         lr=config.train.lr,
@@ -57,21 +73,64 @@ def train(
     # training
     train_itr = itertools.cycle(train_dataloader)
     val_itr = itertools.cycle(validation_dataloader)
+    grad_acc_steps = 0
+    examples_counter = 0
 
     for step in range(total_steps):
         train_batch = next(train_itr)
-        # forward pass
-        target_out = editor(**slice_and_move_batch_for_device(train_batch))
         # compute loss
         if config.train.loss == "kl":
-            loss = compute_kl_loss(editor, train_batch, target_out)
+            loss = compute_kl_loss(editor, train_batch, rank, world_size)
         else:
-            loss = compute_ce_loss(train_batch, target_out)
+            loss = compute_ce_loss(editor, train_batch, rank, world_size)
+
+        (loss / config.train.gradient_accumulation_steps).backward()
+        grad_acc_steps += 1
+        examples_counter += len(train_batch[next(iter(train_batch.keys()))])
+
+        batch_metrics = {
+            "loss/train": loss.detach().item()
+            if loss.shape[0] == 1
+            else loss.detach().mean().item(),
+            "lr": opt.param_groups[0]["lr"],
+            "counters/examples": examples_counter,
+            "counters/step": step,
+            "counters/epoch": step / len(train_dataloader),
+        }
+
+        if grad_acc_steps == config.train.gradient_accumulation_steps == 0:
+            grad_acc_steps = 0
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                editor.parameters(), config.train.max_grad_norm
+            )
+            batch_metrics["grad_norm"] = grad_norm.item()
+            opt.step()
+            opt.zero_grad()
+            scheduler.step()
+
+        if (
+            config.train.log_interval > 0
+            and step % config.train.log_interval == 0
+            and rank == 0
+        ):
+            logger.info(batch_metrics)
+            if config.wandb.enabled:
+                wandb.log(batch_metrics)
 
 
-def compute_kl_loss(editor: GPT2Editor, batch: Dict, out: EditorModelOutput):
+def compute_kl_loss(
+    editor: GPT2Editor,
+    batch: Dict,
+    rank,
+    world_size,
+    average: bool = True,
+):
+    # run the hypernetwork
+    batch = slice_and_move_batch_for_device(batch, rank, world_size)
+    editor_out = editor(**batch)
+
     loss_mask = batch["editor_attention_mask"] > 0
-    editor_logprobs = torch.nn.functional.log_softmax(out.logits)
+    editor_logprobs = torch.nn.functional.log_softmax(editor_out.logits)
     # compute soft labels
     with torch.no_grad():
         # concat and pad outputs
@@ -87,12 +146,41 @@ def compute_kl_loss(editor: GPT2Editor, batch: Dict, out: EditorModelOutput):
         target_logprobs = torch.nn.functional.log_softmax(target_logits)
 
     # compute KL div loss
-    kl_div_loss = (editor_logprobs * (editor_logprobs - target_logprobs)).sum(
-        -1
-    ) / loss_mask.sum(-1)
+    kl_div_loss = (editor_logprobs * (editor_logprobs - target_logprobs)).sum(-1)
+
+    if average:
+        return kl_div_loss / loss_mask.sum(-1)
 
     return kl_div_loss
 
 
-def compute_ce_loss(editor: nn.Module, batch: Dict, out: EditorModelOutput):
-    pass
+def compute_ce_loss(
+    editor: GPT2Editor,
+    batch: Dict,
+    rank,
+    world_size,
+    edit_stop_idx: int = None,
+    average_log_prob: bool = True,
+    token_level: bool = False,
+):
+    # run the hypernetwork
+    batch = slice_and_move_batch_for_device(batch, rank, world_size)
+    editor_out = editor(**batch, edit_stop_idx=edit_stop_idx)
+
+    loss_mask = batch["target_attention_mask"] > 0
+    labels = torch.where(loss_mask, batch["target_input_ids"], 0)
+    labels = labels[:, 1:].clone()
+    logits = editor_out.logits[:, :-1, :]
+
+    # compute ce loss
+    distribution_logps = logits.log_softmax(-1)
+    per_token_logps = torch.gather(
+        distribution_logps, dim=-1, index=labels.unsqueeze(-1)
+    )
+
+    if token_level:
+        return per_token_logps * loss_mask
+    elif average_log_prob:
+        return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+    else:
+        return (per_token_logps * loss_mask).sum(-1)
