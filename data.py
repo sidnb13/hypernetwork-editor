@@ -129,16 +129,14 @@ def load_wikipedia(config: DictConfig):
             text[: config.task.followup_char_limit] for text in followup_text
         ]
 
-        # Tokenize the followup text
-        editor_inputs = tokenizer(
+        target_inputs = tokenizer(
             followup_text,
             add_special_tokens=False,
             max_length=config.task.editor_token_limit,
             padding="max_length",
             truncation=True,
         )
-        # Tokenize the target text
-        target_inputs = tokenizer(
+        editor_inputs = tokenizer(
             row_batch["first_sentence"],
             max_length=config.model.max_length,
             add_special_tokens=False,

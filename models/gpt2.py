@@ -11,7 +11,6 @@ from transformers import (
 )
 from transformers.models.gpt2.modeling_gpt2 import (
     GPT2Attention,
-    GPT2Block,
     GPT2FlashAttention2,
 )
 from transformers.pytorch_utils import Conv1D
@@ -302,7 +301,7 @@ class GPT2Editor(PreTrainedModel):
         output_edited_hidden_states: bool = False,
         output_edit_vectors: bool = False,
         output_editor_attention: bool = False,
-        stop_editing_index: int = None,
+        stop_editing_idx: int = None,
         batch_edit_vectors: torch.Tensor = None,
     ) -> EditorModelOutput:
         # Run target model for encoded hidden states
@@ -316,10 +315,10 @@ class GPT2Editor(PreTrainedModel):
         # dimensions of target_hidden_states:
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
 
-        # If we are stopping editing at stop_editing_index, then we eliminate target_hidden_states beyond that index
-        if stop_editing_index is not None:
+        # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
+        if stop_editing_idx is not None:
             target_hidden_states = target_hidden_states[
-                :, :stop_editing_index, :, :
+                :, :stop_editing_idx, :, :
             ].clone()
 
         # Normalize along the last dimension
@@ -381,13 +380,13 @@ class GPT2Editor(PreTrainedModel):
 
         # If we are stopping editing at stop_editing_index,
         # this pads batch_edit_vectors with 0's to the right of the edited positions
-        if stop_editing_index is not None:
+        if stop_editing_idx is not None:
             batch_edit_vectors = torch.cat(
                 (
                     batch_edit_vectors,
                     torch.zeros(
                         batch_edit_vectors.shape[0],
-                        target_input_ids.shape[1] - stop_editing_index,
+                        target_input_ids.shape[1] - stop_editing_idx,
                         self.config.n_layer + 1,
                         self.config.n_embd,
                     ),

@@ -14,7 +14,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from helpers import slice_and_move_batch_for_device
+from helpers import concat_and_pad_ids, slice_and_move_batch_for_device
 from logger import get_logger
 from models.gpt2 import GPT2Editor
 
@@ -129,27 +129,41 @@ def compute_kl_loss(
     batch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(**batch)
 
-    loss_mask = batch["editor_attention_mask"] > 0
-    editor_logprobs = torch.nn.functional.log_softmax(editor_out.logits)
+    edited_target_logprobs = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
+    target_mask = batch["target_attention_mask"] > 0
     # compute soft labels
     with torch.no_grad():
-        # concat and pad outputs
-        combined_inputs = torch.full_like(loss_mask, -1)
-        nonpad_target = batch["editor_attention_mask"] > 0
-        combined_inputs[nonpad_target] = batch["target_input_ids"][nonpad_target]
-        combined_inputs[loss_mask] = batch["editor_attention_mask"][loss_mask]
-        # run target model
+        pad_token = editor.target_model.config.eos_token_id
+        combined_input_ids = concat_and_pad_ids(batch, pad_token)
         target_logits = editor.target_model(
-            input_ids=combined_inputs,
-            attention_mask=torch.where(combined_inputs > 0, 1, 0).to(loss_mask.device),
+            input_ids=combined_input_ids, attention_mask=combined_input_ids != pad_token
         ).logits
-        target_logprobs = torch.nn.functional.log_softmax(target_logits)
+
+        lengths_A = torch.sum(batch["target_input_ids"] != pad_token, dim=1)
+        lengths_B = torch.sum(batch["editor_input_ids"] != pad_token, dim=1)
+
+        # Create an empty tensor to store the predictions
+        shape = (len(lengths_A), edited_target_logprobs.shape[-2], 50257)
+        extracted_logits = torch.full(
+            shape, torch.nan, device=edited_target_logprobs.device
+        )
+
+        # Extract the predictions corresponding to B
+        for i in range(len(lengths_A)):
+            extracted_logits[i, : lengths_B[i], :] = target_logits[
+                i, lengths_A[i] : lengths_A[i] + lengths_B[i], :
+            ]
+
+        target_logprobs = torch.nn.functional.log_softmax(extracted_logits, dim=-1)
 
     # compute KL div loss
-    kl_div_loss = (editor_logprobs * (editor_logprobs - target_logprobs)).sum(-1)
+    kl_div_loss = (
+        edited_target_logprobs[target_mask, :]
+        * (edited_target_logprobs[target_mask, :] - target_logprobs[target_mask, :])
+    ).sum(-1)
 
     if average:
-        return kl_div_loss / loss_mask.sum(-1)
+        return kl_div_loss / target_mask.sum()
 
     return kl_div_loss
 
@@ -159,24 +173,25 @@ def compute_ce_loss(
     batch: Dict,
     rank,
     world_size,
-    edit_stop_idx: int = None,
+    stop_editing_idx: int = None,
     average_log_prob: bool = True,
     token_level: bool = False,
 ):
     # run the hypernetwork
     batch = slice_and_move_batch_for_device(batch, rank, world_size)
-    editor_out = editor(**batch, edit_stop_idx=edit_stop_idx)
+    editor_out = editor(**batch, stop_editing_idx=stop_editing_idx)
 
     loss_mask = batch["target_attention_mask"] > 0
     labels = torch.where(loss_mask, batch["target_input_ids"], 0)
     labels = labels[:, 1:].clone()
+    loss_mask = loss_mask[:, 1:].clone()
     logits = editor_out.logits[:, :-1, :]
 
     # compute ce loss
     distribution_logps = logits.log_softmax(-1)
     per_token_logps = torch.gather(
         distribution_logps, dim=-1, index=labels.unsqueeze(-1)
-    )
+    ).squeeze()
 
     if token_level:
         return per_token_logps * loss_mask
