@@ -1,6 +1,12 @@
 model: gpt2
 task: wikipedia
 
+exp_name: null
+
+out_dir: ./assets
+ckpt_dir: ${out_dir}/checkpoints
+data_dir: ${out_dir}/data
+
 train:
   lr: 1e-5
   steps: -1
@@ -23,7 +29,6 @@ train:
   loss_mode: kl # or ce
 
   # checkpointing, evaluation, and logging
-  log_interval: 10
   eval_interval: 100
   save_interval: 500
   do_save: true
