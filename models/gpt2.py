@@ -7,7 +7,6 @@ from transformers import (
     GPT2Config,
     GPT2LMHeadModel,
     GPT2Model,
-    PreTrainedModel,
 )
 from transformers.models.gpt2.modeling_gpt2 import (
     GPT2Attention,
@@ -259,9 +258,11 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         return reverse_attention_output
 
 
-class GPT2Editor(PreTrainedModel):
+class GPT2Editor(nn.Module):
     def __init__(self, config: GPT2EditorConfig):
-        super().__init__(config)
+        super().__init__()
+
+        self.config = config
         self.hypernetwork = GPT2EditorHypernetwork(config)
         self.target_model = AutoModelForCausalLM.from_pretrained(config.name_or_path)
         assign_layer_indices(self.target_model)

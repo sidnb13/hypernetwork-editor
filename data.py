@@ -7,7 +7,7 @@ from typing import Any, Callable, List, Literal
 
 import datasets
 import torch.distributed as dist
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from helpers import ROOT_DIR, get_tokenizer
@@ -19,10 +19,10 @@ logger = get_logger(__name__)
 class DatasetCache:
     def __init__(
         self,
-        exclude_argnames: List[str],
+        hash_keys: List[str],
         cache_dir: str | os.PathLike = None,
     ) -> None:
-        self.exclude_argnames = exclude_argnames
+        self.hash_keys = hash_keys
         self.cache_dir = cache_dir or os.path.join(ROOT_DIR, "assets/data/cache")
 
     def __call__(self, func) -> Any:
@@ -30,20 +30,10 @@ class DatasetCache:
             if not os.path.exists(self.cache_dir):
                 os.makedirs(self.cache_dir)
 
-            def get_pruned_dict(obj):
-                prune = {}
-                for k, v in obj.items():
-                    if any(x in k for x in self.exclude_argnames):
-                        continue
-                    if isinstance(v, (dict, DictConfig)):
-                        prune[k] = get_pruned_dict(dict(v))
-                    else:
-                        prune[k] = v
-                return prune
-
-            signature = hashlib.md5(
-                json.dumps(get_pruned_dict(dict(args[0]))).encode("utf-8")
-            ).hexdigest()
+            hash_config = {
+                k: OmegaConf.to_object(getattr(args[0], k)) for k in self.hash_keys
+            }
+            signature = hashlib.md5(json.dumps(hash_config).encode("utf-8")).hexdigest()
             is_rank0 = not dist.is_initialized() or dist.get_rank() == 0
             rank = 0 if is_rank0 else dist.get_rank()
 
@@ -66,16 +56,12 @@ class DatasetCache:
         return wrapper
 
 
-@DatasetCache(
-    exclude_argnames=["n_examples", "test_split", "val_split", "seed", "batch_size"]
-)
+@DatasetCache(hash_keys=["task"])
 def load_nouns(config: DictConfig):
-    pass
+    raise NotImplementedError
 
 
-@DatasetCache(
-    exclude_argnames=["n_examples", "test_split", "val_split", "seed", "batch_size"]
-)
+@DatasetCache(hash_keys=["task"])
 def load_wikipedia(config: DictConfig):
     assert config.task.name == "wikipedia", "task must be 'wikipedia'"
 
@@ -217,15 +203,16 @@ def get_dataloader(
 ) -> DataLoader:
     return DataLoader(
         dataset,
-        batch_size=config.data.train_batch_size
+        batch_size=config.train.train_batch_size
         if "train" in split
-        else config.data.eval_batch_size,
+        else config.train.validation_batch_size,
         shuffle=True if "train" in split else False,
     )
 
 
 def get_task(config: DictConfig, suffix: str, split: str) -> Callable:
-    dataset = globals().get("load_" + suffix)(config)
+    dataset_load_fn = globals().get("load_" + suffix)
+    dataset = dataset_load_fn(config)
 
     if config.data.n_examples > 0:
         split = f"{split}[:{config.data.n_examples}]"

@@ -7,6 +7,7 @@ import torch.distributed as dist
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from transformers import (
     get_constant_schedule,
@@ -18,28 +19,37 @@ from transformers import (
 from helpers import concat_and_pad_ids, slice_and_move_batch_for_device
 from logger import get_logger
 from models.gpt2 import GPT2Editor
+from models.utils import EditorModelOutput
 
 logger = get_logger(__name__)
 
 
+def setup(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+
+    # initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
 def train(
+    rank: int,
+    world_size: int,
     config: DictConfig,
     editor: nn.Module,
     train_dataloader: DataLoader,
     validation_dataloader: DataLoader,
-    rank: int,
-    world_size: int,
 ):
-    # wandb setup
-    if config.wandb.enabled and rank == 0:
-        wandb.init(
-            project=config.wandb.project,
-            name=config.wandb.name,
-            config=dict(config),
-            entity=config.wandb.entity,
-            tags=config.wandb.tags,
-            group=config.wandb.group,
-        )
+    # distributed setup
+    if config.train.use_ddp:
+        setup(rank, world_size)
+        editor = DDP(editor.to(rank), device_ids=[rank])
+    else:
+        editor = editor.to(rank)
 
     opt = torch.optim.Adam(
         editor.parameters(),
@@ -70,6 +80,21 @@ def train(
         scheduler = get_constant_schedule_with_warmup(opt, warmup_steps)
     elif config.train.scheduler == "constant":
         scheduler = get_constant_schedule(opt)
+    else:
+        raise ValueError(f"Unknown scheduler: {config.train.scheduler}")
+
+    # wandb setup
+    if config.wandb.resume and config.wandb.run_id:
+        load_model_checkpoint(rank, config.ckpt_folder, editor, opt, scheduler, config)
+    elif config.wandb.enabled and rank == 0:
+        wandb.init(
+            project=config.wandb.project,
+            name=config.exp_name,
+            config=dict(config),
+            entity=config.wandb.entity,
+            tags=config.wandb.tags,
+            group=config.wandb.group,
+        )
 
     # training
     train_itr = itertools.cycle(train_dataloader)
@@ -81,15 +106,21 @@ def train(
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
-            loss = compute_kl_loss(editor, train_batch, rank, world_size)
+            loss, kl_loss, penalty_loss = compute_kl_loss(
+                editor, train_batch, rank, world_size
+            )
+            ce_loss = None
         else:
-            loss = compute_ce_loss(editor, train_batch, rank, world_size)
+            loss, ce_loss, penalty_loss = compute_ce_loss(
+                editor, train_batch, rank, world_size
+            )
+            kl_loss = None
 
         (loss / config.train.gradient_accumulation_steps).backward()
         grad_acc_steps += 1
         train_examples_counter += len(train_batch[next(iter(train_batch.keys()))])
 
-        if grad_acc_steps == config.train.gradient_accumulation_steps == 0:
+        if grad_acc_steps == config.train.gradient_accumulation_steps:
             grad_acc_steps = 0
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 editor.parameters(), config.train.max_grad_norm
@@ -100,8 +131,9 @@ def train(
 
             batch_metrics = {
                 "loss/train": loss.detach().item()
-                if loss.shape[0] == 1
+                if loss.dim() == 0
                 else loss.detach().mean().item(),
+                "penalty/train": penalty_loss.detach().item(),
                 "lr": opt.param_groups[0]["lr"],
                 "counters/train_examples": train_examples_counter,
                 "counters/step": step,
@@ -109,32 +141,49 @@ def train(
                 "grad_norm": grad_norm.item(),
             }
 
-            if rank == 0:
-                logger.info(batch_metrics)
+            if ce_loss:
+                batch_metrics["ce/train"] = ce_loss.detach().item()
+            if kl_loss:
+                batch_metrics["kl/train"] = kl_loss.detach().item()
+
+            if rank == 0 and (step > 0 and step % config.train.log_interval == 0):
+                print(batch_metrics)
                 if config.wandb.enabled:
                     wandb.log(batch_metrics)
 
         if step > 0 and step % config.train.eval_interval == 0:
+            batch_metrics = {
+                "counters/val_examples": val_examples_counter,
+            }
             with torch.no_grad():
                 val_batch = next(val_itr)
                 if config.train.loss == "kl":
-                    loss = compute_kl_loss(editor, val_batch, rank, world_size)
+                    loss, kl_loss, penalty_loss = compute_kl_loss(
+                        editor, val_batch, rank, world_size
+                    )
+                    batch_metrics["kl/val"] = kl_loss.detach().item()
                 else:
-                    loss = compute_ce_loss(editor, val_batch, rank, world_size)
+                    loss, ce_loss, penalty_loss = compute_ce_loss(
+                        editor, val_batch, rank, world_size
+                    )
+                    batch_metrics["ce/val"] = ce_loss.detach().item()
+
+            batch_metrics["loss/penalty"] = penalty_loss.detach().item()
+            batch_metrics["loss/val"] = (
+                loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
+            )
 
             val_examples_counter += len(val_batch[next(iter(val_batch.keys()))])
-
-            batch_metrics = {
-                "counters/val_examples": val_examples_counter,
-                "loss/val": loss.item(),
-            }
 
         if (
             rank == 0
             and (step > 0 and step % config.train.save_interval == 0)
             and config.train.do_save
         ):
-            pass
+            save_model_checkpoint(step, editor, opt, scheduler, config)
+
+    if config.train.use_ddp:
+        cleanup()
 
 
 def save_model_checkpoint(
@@ -144,6 +193,7 @@ def save_model_checkpoint(
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     config: DictConfig,
 ):
+    """Save a model checkpoint"""
     state_dict = {
         "hypernetwork": model.hypernetwork.state_dict(),
         "step": step,
@@ -151,18 +201,43 @@ def save_model_checkpoint(
         "scheduler": scheduler.state_dict(),
     }
     ckpt_folder = os.path.join(config.ckpt_dir, config.exp_name, "step-{}".format(step))
+    os.makedirs(ckpt_folder, exist_ok=True)
     torch.save(state_dict, ckpt_folder)
     OmegaConf.save(config, os.path.join(ckpt_folder, "config.yaml"))
 
 
 def load_model_checkpoint(
+    rank: int,
     ckpt_folder: str,
     model: GPT2Editor,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     config: DictConfig,
 ):
-    pass
+    """Load a model checkpoint and resume wandb run."""
+    if rank == 0 and config.wandb.enabled and config.wandb.resume:
+        wandb.init(
+            project=config.wandb.project,
+            entity=config.wandb.entity,
+            resume="must",
+            id=config.wandb.run_id,
+        )
+
+    state_dict = torch.load(ckpt_folder, map_location=rank)
+    model.hypernetwork.load_state_dict(state_dict["hypernetwork"])
+    optimizer.load_state_dict(state_dict["opt"])
+    scheduler.load_state_dict(state_dict["scheduler"])
+
+
+def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int):
+    if edit_stop_idx is not None:
+        edit_vector_norm = out.edit_vectors.norm(dim=-1)[:, :edit_stop_idx]
+    else:
+        edit_vector_norm = out.edit_vectors.norm(dim=-1)
+    edit_ratio = edit_vector_norm / out.target_hidden_states.norm(dim=-1)
+    per_datapoint_penalty_loss = lam * torch.sum(edit_ratio, dim=[1, 2])
+
+    return per_datapoint_penalty_loss
 
 
 def compute_kl_loss(
@@ -170,37 +245,43 @@ def compute_kl_loss(
     batch: Dict[str, torch.Tensor],
     rank: int,
     world_size: int,
-    average: bool = True,
     stop_editing_idx: int = None,
+    lam: float = 0.0,
 ):
     # run the hypernetwork
     batch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
-        editor_input_ids=batch["editor_input_ids"],
-        editor_attention_mask=batch["editor_attention_mask"],
-        target_input_ids=batch["target_input_ids"],
-        target_attention_mask=batch["target_attention_mask"],
+        **batch,
         stop_editing_idx=stop_editing_idx,
+        output_target_hidden_states=True,
+        output_edited_hidden_states=True,
+        output_edit_vectors=True,
     )
 
     edited_target_logprobs = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
-    target_mask = batch["target_attention_mask"] > 0
+    edit_target_mask = batch["target_attention_mask"] > 0
     # compute soft labels
     with torch.no_grad():
-        pad_token = editor.target_model.config.eos_token_id
+        target_model = (
+            editor.module.target_model
+            if isinstance(editor, DDP)
+            else editor.target_model
+        )
+        pad_token = target_model.config.eos_token_id
         combined_input_ids = concat_and_pad_ids(batch, pad_token)
-        target_logits = editor.target_model(
+
+        target_logits = target_model(
             input_ids=combined_input_ids, attention_mask=combined_input_ids != pad_token
         ).logits
 
-        lengths_A = torch.sum(batch["target_input_ids"] != pad_token, dim=1)
-        lengths_B = torch.sum(batch["editor_input_ids"] != pad_token, dim=1)
+        lengths_A = torch.sum(batch["editor_attention_mask"] > 0, dim=1)
+        lengths_B = torch.sum(batch["target_attention_mask"] > 0, dim=1)
 
         # Create an empty tensor to store the predictions
         shape = (
             len(lengths_A),
             edited_target_logprobs.shape[-2],
-            editor.target_model.config.vocab_size,
+            target_model.config.vocab_size,
         )
         extracted_logits = torch.full(
             shape, torch.nan, device=edited_target_logprobs.device
@@ -216,14 +297,25 @@ def compute_kl_loss(
 
     # compute KL div loss
     kl_div_loss = (
-        edited_target_logprobs[target_mask, :]
-        * (edited_target_logprobs[target_mask, :] - target_logprobs[target_mask, :])
-    ).sum(-1)
+        edited_target_logprobs[edit_target_mask, :].exp()
+        * (
+            edited_target_logprobs[edit_target_mask, :]
+            - target_logprobs[edit_target_mask, :]
+        ).mean()
+    )
 
-    if average:
-        return kl_div_loss / target_mask.sum()
+    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
 
-    return kl_div_loss
+    # gather from all ranks
+    if dist.is_initialized():
+        dist.all_reduce(kl_div_loss, op=dist.ReduceOp.SUM)
+        dist.all_reduce(penalty_loss, op=dist.ReduceOp.SUM)
+
+    return (
+        kl_div_loss.mean() + penalty_loss.mean(),
+        kl_div_loss.mean(),
+        penalty_loss.mean(),
+    )
 
 
 def compute_ce_loss(
@@ -233,16 +325,16 @@ def compute_ce_loss(
     world_size: int,
     stop_editing_idx: int = None,
     average_log_prob: bool = True,
-    token_level: bool = False,
+    lam: float = 0.0,
 ):
     # run the hypernetwork
     batch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
-        editor_input_ids=batch["editor_input_ids"],
-        editor_attention_mask=batch["editor_attention_mask"],
-        target_input_ids=batch["target_input_ids"],
-        target_attention_mask=batch["target_attention_mask"],
+        **batch,
         stop_editing_idx=stop_editing_idx,
+        output_target_hidden_states=True,
+        output_edited_hidden_states=True,
+        output_edit_vectors=True,
     )
 
     loss_mask = batch["target_attention_mask"] > 0
@@ -257,9 +349,18 @@ def compute_ce_loss(
         distribution_logps, dim=-1, index=labels.unsqueeze(-1)
     ).squeeze()
 
-    if token_level:
-        return per_token_logps * loss_mask
-    elif average_log_prob:
-        return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+    if average_log_prob:
+        ce_loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
     else:
-        return (per_token_logps * loss_mask).sum(-1)
+        ce_loss = -(per_token_logps * loss_mask).sum(-1)
+
+    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
+
+    # gather from all ranks
+    if dist.is_initialized():
+        dist.all_reduce(ce_loss, op=dist.ReduceOp.SUM)
+        dist.all_reduce(penalty_loss, op=dist.ReduceOp.SUM)
+
+    loss = ce_loss.mean() + penalty_loss.mean()
+
+    return loss, ce_loss.mean(), penalty_loss.mean()

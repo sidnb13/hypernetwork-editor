@@ -24,10 +24,10 @@ logging.basicConfig(level=logging.INFO)
 
 def get_logger(name):
     logger = logging.getLogger(name)
-    logger.setLevel(os.environ.get("LOG_LEVEL", "DEBUG").upper())
+    logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
     return logger
 
 
-if os.environ.get("LOG_LEVEL", "DEBUG").upper() == "DEBUG":
+if os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG":
     torch.set_printoptions(profile="full")

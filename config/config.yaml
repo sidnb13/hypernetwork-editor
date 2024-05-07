@@ -1,20 +1,27 @@
-model: gpt2
-task: wikipedia
+defaults:
+  - _self_
+  - model: gpt2
+  - task: wikipedia
 
-exp_name: null
+mode: train
 
 out_dir: ./assets
 ckpt_dir: ${out_dir}/checkpoints
 data_dir: ${out_dir}/data
 
+exp_name: null
+seed: 42
+
 train:
+  use_ddp: false
+  ckpt_folder: null
   lr: 1e-5
   steps: -1
   warmup_steps: 0.1
   epochs: 1
-  train_batch_size: 32
-  validation_batch_size: 16
-  scheduler: null
+  train_batch_size: 8
+  validation_batch_size: 4
+  scheduler: constant
   optim: AdamW
   adam_beta1: 0.9
   adam_beta2: 0.999
@@ -26,16 +33,24 @@ train:
   # edit specific hparams
   lambda: 0
   lambda_testing_penalty: 0
-  loss_mode: kl # or ce
+  loss: kl # or ce
 
   # checkpointing, evaluation, and logging
+  log_interval: 100
   eval_interval: 100
   save_interval: 500
   do_save: true
 
+data:
+  test_split: 0.1
+  val_split: 0.1
+  n_examples: -1
+
 wandb:
-  project: none
-  name: none
-  entity: none
+  enabled: false
+  project: hypernetwork-editor
+  entity: sidnb13
   tags: []
-  group: none
+  group: null
+  run_id: null
+  resume: false
