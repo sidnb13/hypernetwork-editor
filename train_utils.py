@@ -10,6 +10,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from transformers import (
+    AutoTokenizer,
     get_constant_schedule,
     get_constant_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
@@ -260,6 +261,7 @@ def compute_kl_loss(
 
     edited_target_logps = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
     edit_target_mask = batch["target_attention_mask"] > 0
+
     # compute soft labels
     with torch.no_grad():
         target_model = (
@@ -267,8 +269,29 @@ def compute_kl_loss(
             if isinstance(editor, DDP)
             else editor.target_model
         )
+
+        tok = AutoTokenizer.from_pretrained(target_model.config.name_or_path)
+
         pad_token = target_model.config.eos_token_id
         combined_input_ids = concat_and_pad_ids(batch, pad_token)
+
+        print("BATCH TARGET IDS", batch["target_input_ids"])
+        print("BATCH EDITED IDS", batch["editor_input_ids"])
+        print("COMBINED INPUT IDS", combined_input_ids)
+
+        # tokenize them
+        print(
+            "TARGET DECODE",
+            tok.batch_decode(batch["target_input_ids"], skip_special_tokens=True),
+        )
+        print(
+            "EDITOR DECODE",
+            tok.batch_decode(batch["editor_input_ids"], skip_special_tokens=True),
+        )
+        print(
+            "COMBINED DECODE",
+            tok.batch_decode(combined_input_ids, skip_special_tokens=True),
+        )
 
         target_logits = target_model(
             input_ids=combined_input_ids, attention_mask=combined_input_ids != pad_token
@@ -296,11 +319,29 @@ def compute_kl_loss(
 
         target_logps = torch.nn.functional.log_softmax(extracted_logits, dim=-1)
 
+    print("EXTRACT LOGITS SHAPE", extracted_logits.shape)
+
+    print("TARGET INPUT IDS", batch["target_input_ids"][edit_target_mask])
+    print("COMBINED INPUT IDS", combined_input_ids[:, -50:][edit_target_mask])
+    print("EDIT TARGET MASK", edit_target_mask)
+
+    edited_target_preds = torch.argmax(editor_out.logits[edit_target_mask, :], dim=-1)
+    target_preds = torch.argmax(extracted_logits[edit_target_mask, :], dim=-1)
+
+    print("EDITED TARGET PREDICTIONS", "".join(tok.batch_decode(edited_target_preds)))
+    print("TARGET PREDICTIONS", "".join(tok.batch_decode(target_preds)))
+
     # compute KL div loss
     kl_div_loss = (
         edited_target_logps[edit_target_mask, :].exp()
         * (edited_target_logps[edit_target_mask, :] - target_logps[edit_target_mask, :])
     ).mean()
+    
+    
+
+    print("KL:", kl_div_loss.mean().item())
+
+    exit(0)
 
     penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
 
