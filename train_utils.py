@@ -258,7 +258,7 @@ def compute_kl_loss(
         output_edit_vectors=True,
     )
 
-    edited_target_logprobs = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
+    edited_target_logps = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
     edit_target_mask = batch["target_attention_mask"] > 0
     # compute soft labels
     with torch.no_grad():
@@ -278,31 +278,29 @@ def compute_kl_loss(
         lengths_B = torch.sum(batch["target_attention_mask"] > 0, dim=1)
 
         # Create an empty tensor to store the predictions
+        target_seq_len = edited_target_logps.shape[-2]
+        edit_seq_len = target_logits.shape[-2]
         shape = (
             len(lengths_A),
-            edited_target_logprobs.shape[-2],
+            target_seq_len,
             target_model.config.vocab_size,
         )
         extracted_logits = torch.full(
-            shape, torch.nan, device=edited_target_logprobs.device
+            shape, torch.nan, device=edited_target_logps.device
         )
-
-        # Extract the predictions corresponding to B
+        # Extract the predictions corresponding to B, assume LEFT padding
         for i in range(len(lengths_A)):
-            extracted_logits[i, : lengths_B[i], :] = target_logits[
-                i, lengths_A[i] : lengths_A[i] + lengths_B[i], :
+            extracted_logits[i, target_seq_len - lengths_B[i] :, :] = target_logits[
+                i, edit_seq_len - lengths_B[i] :, :
             ]
 
-        target_logprobs = torch.nn.functional.log_softmax(extracted_logits, dim=-1)
+        target_logps = torch.nn.functional.log_softmax(extracted_logits, dim=-1)
 
     # compute KL div loss
     kl_div_loss = (
-        edited_target_logprobs[edit_target_mask, :].exp()
-        * (
-            edited_target_logprobs[edit_target_mask, :]
-            - target_logprobs[edit_target_mask, :]
-        ).mean()
-    )
+        edited_target_logps[edit_target_mask, :].exp()
+        * (edited_target_logps[edit_target_mask, :] - target_logps[edit_target_mask, :])
+    ).mean()
 
     penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
 

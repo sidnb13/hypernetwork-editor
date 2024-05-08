@@ -12,7 +12,6 @@ from transformers.models.gpt2.modeling_gpt2 import (
     GPT2Attention,
     GPT2FlashAttention2,
 )
-from transformers.pytorch_utils import Conv1D
 
 from models.utils import EditorModelOutput
 
@@ -20,14 +19,195 @@ from .utils import EditorConfig, add_fwd_hooks, assign_layer_indices
 
 
 class GPT2EditorConfig(GPT2Config, EditorConfig):
-    pass
+    init_attn_proj_bias: bool = False
 
 
-class EditorCrossAttention(GPT2Attention):
+class Conv1D(nn.Module):
+    """
+    1D-convolutional layer as defined by Radford et al. for OpenAI GPT (and also used in GPT-2).
+
+    Basically works like a linear layer but the weights are transposed.
+
+    Args:
+        nf (`int`): The number of output features.
+        nx (`int`): The number of input features.
+    """
+
+    def __init__(self, nf, nx, init_bias: bool = False):
+        super().__init__()
+        self.nf = nf
+        self.weight = nn.Parameter(torch.empty(nx, nf))
+        self.bias = nn.Parameter(torch.zeros(nf))
+        nn.init.normal_(self.weight, std=0.02)
+
+        # Modification from original GPT2 implementation
+        if init_bias:
+            nn.init.normal_(self.bias, std=0.02)
+
+    def forward(self, x):
+        size_out = x.size()[:-1] + (self.nf,)
+        x = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
+        x = x.view(size_out)
+        return x
+
+
+class OldEditorAttention(nn.Module):
+    def __init__(self, config: GPT2EditorConfig):
+        super().__init__()
+
+        # Controls whether the head will do a global softmax in all positions & layers
+        # If True, the attn is global and will sum to 1
+        # If False, the attn is a logistic fxn independently for every layer & token
+        # I suspect we will also want to penalize the intervention norm
+        self.num_editing_heads = (
+            config.num_editing_heads
+        )  # should default to 1, but we're going to test adding more
+        self.edit_channel_width = config.n_embd * config.edit_channel_width_factor
+        if self.edit_channel_width % self.num_editing_heads != 0:
+            print("Error: config hidden size is not divisible by num_editing_heads")
+        self.head_dim = self.edit_channel_width // self.num_editing_heads
+        self.embed_dim = config.n_embd
+
+        max_positions = (
+            config.n_positions
+        )  # does this do anything? can try killing this later
+        self.register_buffer(
+            "bias",
+            torch.tril(
+                torch.ones((max_positions, max_positions), dtype=torch.bool)
+            ).view(1, 1, max_positions, max_positions),
+            persistent=False,
+        )
+        self.register_buffer("masked_bias", torch.tensor(-1e4), persistent=False)
+
+        # We compute Q and K as a single nn.linear; but will later break apart into subcomponents
+
+        ## Before modification to a variable channel-width
+        # self.q_attn = nn.Linear(self.embed_dim, self.embed_dim)
+        # self.k_attn = nn.Linear(self.embed_dim, self.embed_dim)
+        # self.v_attn = nn.Linear(self.embed_dim, self.embed_dim)
+        # self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+        self.q_attn = nn.Linear(self.embed_dim, self.edit_channel_width)
+        self.k_attn = nn.Linear(self.embed_dim, self.edit_channel_width)
+        self.v_attn = nn.Linear(self.embed_dim, self.edit_channel_width)
+        self.out_proj = nn.Linear(self.edit_channel_width, self.embed_dim)
+
+    def _split_heads(self, x):
+        """Split the last dimension into (num_heads, head_dim)."""
+        new_shape = x.size()[:-1] + (self.num_editing_heads, self.head_dim)
+        return x.view(*new_shape)
+
+    def _new_reverse_attn(self, query, key, value, attention_mask=None, head_mask=None):
+        # Assume that we are doing softmax attention
+        # Project and split the query, key, value tensors
+        split_query = self._split_heads(query)
+        split_key = self._split_heads(key)
+        split_value = self._split_heads(value)
+
+        # Double-application (is this actually good/better for some reason?)
+        # self._split_heads(self.q_attn(query))
+        # self._split_heads(self.k_attn(key))
+        # self._split_heads(self.v_attn(value))
+
+        if split_query.dim() != 4:
+            print("Error: Expected query to be 4D tensor, but got something else!")
+        if split_key.dim() != 3:
+            print("Error: Expected key to be 3D tensor, but got something else!")
+        if split_value.dim() != 3:
+            print("Error: Expected value to be 3D tensor, but got something else!")
+
+        # Query should be shaped as (batch_index, sequence_index, head_index, head_dim)
+        # Key and value should be shaped as (batch_index, head_index, head_dim)
+
+        KQ_weights = torch.matmul(
+            split_query.permute(0, 2, 1, 3), split_key.unsqueeze(-1)
+        ).squeeze(-1)
+
+        # Then we take the softmax within the positional divisions
+        softmaxed_weights = nn.functional.softmax(KQ_weights, dim=-1)
+
+        # Adjusting value selection for head dimension
+        attn_output = torch.matmul(
+            softmaxed_weights.unsqueeze(-1), split_value.unsqueeze(-2)
+        )
+
+        # combine heads: change 50, 8, 104, 96 to 50, 104, 768
+        # first, permute
+        attn_output = attn_output.permute(0, 2, 1, 3)
+
+        # combin heads x head_dims
+        attn_output = attn_output.reshape(
+            -1, attn_output.size(1), attn_output.size(2) * attn_output.size(3)
+        )
+        # now project back
+        projected_output = self.out_proj(attn_output)
+
+        return projected_output, softmaxed_weights
+
+    def _reverse_attn(self, query, key, value, attention_mask=None, head_mask=None):
+        if key.dim() == 4:
+            K_reduced = key[
+                :, :, -1, :
+            ]  # R# Check: that the second dimension of K is only a single element when we have batching
+            KQ_weights = torch.bmm(K_reduced, query.transpose(1, 2))
+            logistic_weights = torch.atan(KQ_weights)
+            attn_output = torch.bmm(
+                logistic_weights.transpose(1, 2),
+                value[
+                    :, :, -1, :
+                ],  # we take the editor output only over the final token position
+            )
+
+        if key.dim() == 3:
+            QK_weights = torch.matmul(query, key.transpose(-1, -2))
+            logistic_weights = torch.atan(QK_weights)
+            attn_output = torch.matmul(logistic_weights, value)
+
+        return attn_output, logistic_weights
+
+    def forward(
+        self,
+        editor_hidden_states,
+        encoder_hidden_states,
+        attention_mask=None,
+        output_attentions=False,
+    ):
+        # Here, the query is the target hidden encoder, the key is the editor, and the value is the editor
+        query = self.q_attn(encoder_hidden_states)
+        if editor_hidden_states.dim() == 3:
+            key = self.k_attn(
+                # I don't quite understand why sometimes editor_hidden_states is 4 dimensional, sometimes 3
+                # seems like it's sometimes 20, 1, 4, 768 and sometimes 20, 4, 768. what gives?
+                editor_hidden_states[:, -1, :]
+            )  # Pull only the final token position
+            value = self.v_attn(
+                # [:, 0, :1, :]
+                editor_hidden_states[:, -1, :]
+            )  # Pull only the final token position
+
+        if editor_hidden_states.dim() == 4:
+            key = self.k_attn(
+                editor_hidden_states[:, 0, -1, :]
+            )  # Pull only the final token position
+            value = self.v_attn(
+                # [:, 0, :1, :]
+                editor_hidden_states[:, 0, -1, :]
+            )  # Pull only the final token position
+
+        attn_output, attn_weights = self._new_reverse_attn(query, key, value)
+
+        if output_attentions:
+            return (attn_output, attn_weights)
+        else:
+            return (attn_output,)
+
+
+class EditorUnembedCrossAttention(nn.Module):
     is_cross_attention = True
 
     def __init__(self, config: GPT2EditorConfig, layer_idx=None, **kwargs):
-        nn.Module.__init__(self)
+        super().__init__()
         self.config = config
         max_positions = config.n_positions
         self.register_buffer(
@@ -65,19 +245,25 @@ class EditorCrossAttention(GPT2Attention):
         self.scale_attn_weights = config.scale_attn_weights
 
         # Layer-wise attention scaling, reordering, and upcasting
-        self.scale_attn_by_inverse_layer_idx = config.scale_attn_by_inverse_layer_idx
+        self.scale_attn_by_inverse_layer_idx = False  # TODO: look into this
         self.layer_idx = layer_idx
         self.reorder_and_upcast_attn = config.reorder_and_upcast_attn
 
         # edit channel width specifies
         self.c_attn = Conv1D(
-            2 * self.embed_dim * self.config.edit_channel_width_factor, self.embed_dim
+            2 * self.embed_dim * self.config.edit_channel_width_factor,
+            self.embed_dim,
+            init_bias=config.init_attn_proj_bias,
         )
         self.q_attn = Conv1D(
-            self.embed_dim * self.config.edit_channel_width_factor, self.embed_dim
+            self.embed_dim * self.config.edit_channel_width_factor,
+            self.embed_dim,
+            init_bias=config.init_attn_proj_bias,
         )
         self.c_proj = Conv1D(
-            self.embed_dim, self.embed_dim * self.config.edit_channel_width_factor
+            self.embed_dim,
+            self.embed_dim * self.config.edit_channel_width_factor,
+            init_bias=config.init_attn_proj_bias,
         )
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
@@ -85,6 +271,20 @@ class EditorCrossAttention(GPT2Attention):
         self.is_causal = True
 
         self.pruned_heads = set()
+
+        # take methods from GPT2Attention and GPT2FlashAttention implementations
+        self._flash_attn_enabled = config._attn_implementation == "flash_attention_2"
+        self._attn = (
+            GPT2FlashAttention2._flash_attention_forward.__get__(
+                self, GPT2FlashAttention2
+            )
+            if self._flash_attn_enabled
+            else GPT2Attention._attn.__get__(self, GPT2Attention)
+        )
+        self._merge_heads = GPT2Attention._merge_heads.__get__(self, GPT2Attention)
+        self._upcast_and_reordered_attn = (
+            GPT2Attention._upcast_and_reordered_attn.__get__(self, GPT2Attention)
+        )
 
     def _split_heads(self, tensor):
         """
@@ -120,18 +320,12 @@ class EditorCrossAttention(GPT2Attention):
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
 
         split_query = self._split_heads(query)
-        bsz, _, num_heads, head_dim = split_query.size()
+        bsz, query_len, num_heads, head_dim = split_query.size()
 
-        # (bsz, seq_len, num_heads, head_dim) -> (bsz * num_heads, seq_len, head_dim)
-        query = split_query.permute(0, 2, 1, 3).reshape(bsz * num_heads, -1, head_dim)
-        key = (
-            self._split_heads(key).unsqueeze(-2).reshape(bsz * num_heads, -1, head_dim)
-        )
-        value = (
-            self._split_heads(value)
-            .unsqueeze(-2)
-            .reshape(bsz * num_heads, -1, head_dim)
-        )
+        # (bsz, seq_len, num_heads, head_dim) -> (bsz, num_heads, seq_len, head_dim)
+        query = split_query.permute(0, 2, 1, 3)
+        key = self._split_heads(key).unsqueeze(-2)
+        value = self._split_heads(value).unsqueeze(-2)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -143,14 +337,24 @@ class EditorCrossAttention(GPT2Attention):
         else:
             present = None
 
-        if self.reorder_and_upcast_attn:
-            attn_output, attn_weights = self._upcast_and_reordered_attn(
-                query, key, value, attention_mask, head_mask
+        if self._flash_attn_enabled:
+            attn_dropout = self.attn_dropout.p if self.training else 0.0
+            attn_output = self._attn(
+                query, key, value, attention_mask, query_len, dropout=attn_dropout
+            )
+            attn_weights = attn_output.reshape(
+                bsz, query_len, self.num_heads * self.head_dim
             )
         else:
-            attn_output, attn_weights = self._attn(
-                query, key, value, attention_mask, head_mask
-            )
+            if self.reorder_and_upcast_attn:
+                attn_output, attn_weights = self._upcast_and_reordered_attn(
+                    query, key, value, attention_mask, head_mask
+                )
+            else:
+                attn_output, attn_weights = self._attn(
+                    query, key, value, attention_mask, head_mask
+                )
+
         # unmerge the head and batch dimension
         attn_output = attn_output.reshape(bsz, num_heads, -1, head_dim)
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
@@ -164,10 +368,6 @@ class EditorCrossAttention(GPT2Attention):
         return outputs  # a, present, (attentions)
 
 
-class EditorCrossFlashAttention2(EditorCrossAttention, GPT2FlashAttention2):
-    pass
-
-
 class GPT2EditorHypernetwork(GPT2LMHeadModel):
     _tied_weights_keys = []
 
@@ -176,15 +376,14 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         self.transformer = GPT2Model(config)
         # only LM head gets special attention
         if config._attn_implementation == "flash_attention_2":
-            self.lm_head = EditorCrossFlashAttention2(
-                config=config, layer_idx=config.chop_editor_at_layer
-            )
             _attention_cls = GPT2FlashAttention2
         else:
-            self.lm_head = EditorCrossAttention(
-                config=config, layer_idx=config.chop_editor_at_layer
-            )
             _attention_cls = GPT2Attention
+
+        self.lm_head = EditorUnembedCrossAttention(
+            config=config, layer_idx=config.chop_editor_at_layer
+        )
+        # self.lm_head = OldEditorAttention(config)
 
         # prune layers and add cross attn heads
         self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
@@ -410,13 +609,17 @@ class GPT2Editor(nn.Module):
 
         # Now editing the target model
         hooks1 = [(self.target_model.transformer.wte, embedding_edit_add)]
-        hooks2 = [(self.target_model.transformer.h[L], edit_add) for L in range(12)]
+        hooks2 = [
+            (self.target_model.transformer.h[L], edit_add)
+            for L in range(self.target_model.config.n_layer)
+        ]
         hooks = hooks1 + hooks2
         with add_fwd_hooks(hooks):
             # THIS IS THE LINE WHERE THE MODEL IS CALLED (AND THE EDITOR IS CALLED AT
             # THE END OF `layer` AS A SIDE EFFECT)
             target_result = self.target_model(
-                target_input_ids,
+                input_ids=target_input_ids,
+                attention_mask=target_attention_mask,
                 output_hidden_states=output_edited_hidden_states,
             )
 

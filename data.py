@@ -127,6 +127,7 @@ def load_wikipedia(config: DictConfig):
             max_length=config.model.max_length,
             add_special_tokens=False,
             padding="max_length",
+            truncation=True,
         )
 
         return {
