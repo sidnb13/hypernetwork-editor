@@ -10,6 +10,11 @@ from data import get_dataloader, get_task
 from models.gpt2 import GPT2Editor, GPT2EditorConfig
 from train_utils import train
 
+#should I need to do this? 
+#trying to solve:
+# RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0! (when checking argument for argument mat1 in method wrapper_CUDA_addmm)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(config: DictConfig):
@@ -20,7 +25,7 @@ def main(config: DictConfig):
 
     model_config = GPT2EditorConfig(
         name_or_path=config.model,
-        edit_channel_width_factor=config.model.edit_channel_width_factor,
+        edit_channel_multiply_factor=config.model.edit_channel_multiply_factor,
         chop_editor_at_layer=config.model.chop_editor_at_layer,
         num_editing_heads=config.model.num_editing_heads,
         use_layerwise_embeddings=config.model.use_layerwise_embeddings,
