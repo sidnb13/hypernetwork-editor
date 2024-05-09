@@ -46,7 +46,7 @@ class Conv1D(nn.Module):
 
     def forward(self, x):
         size_out = x.size()[:-1] + (self.nf,)
-        #print device of all components
+        # print device of all components
         # print(self.bias.device)
         # print(x.view(-1, x.size(-1)).device)
         # print(self.weight.device)
@@ -226,8 +226,8 @@ class EditorUnembedCrossAttention(nn.Module):
         self.embed_dim = config.n_embd
         self.num_heads = config.num_editing_heads
 
-        #Note by Mike: so, how to add more expressivity going forward?
-        #I think the natural thing to do is to add support for many more heads, by changing the
+        # Note by Mike: so, how to add more expressivity going forward?
+        # I think the natural thing to do is to add support for many more heads, by changing the
         # matrix-mulitply code below, such that it effectively processes only d_embed of the attention channel at a time
         # in a loop, adding the results of that part of the attention computation to the output tensor
         # This will allow us to use much wider edit_channel_multiply_factor!
@@ -244,7 +244,7 @@ class EditorUnembedCrossAttention(nn.Module):
 
         # # split additional factor of channel width
         # # Changing this back to embed_dim, now that we're accumulating multiplies!
-        self.split_size = self.embed_dim #* self.config.edit_channel_multiply_factor
+        self.split_size = self.embed_dim  # * self.config.edit_channel_multiply_factor
 
         if (
             self.head_dim * self.num_heads
@@ -262,48 +262,36 @@ class EditorUnembedCrossAttention(nn.Module):
         self.layer_idx = layer_idx
         self.reorder_and_upcast_attn = config.reorder_and_upcast_attn
 
-        self.c_attn = []
-        self.q_attn = []
-        self.c_proj = []
-
-        for i in range(config.edit_channel_multiply_factor):
-            self.c_attn.append(
+        self.c_attn = nn.ModuleList(
+            [
                 Conv1D(
                     2 * self.embed_dim,
                     self.embed_dim,
                     init_bias=config.init_attn_proj_bias,
                 )
-            )
-            self.q_attn.append(
+                for _ in range(config.edit_channel_multiply_factor)
+            ]
+        )
+        self.q_attn = nn.ModuleList(
+            [
                 Conv1D(
                     self.embed_dim,
                     self.embed_dim,
                     init_bias=config.init_attn_proj_bias,
                 )
-            )
-            self.c_proj.append(
+                for _ in range(config.edit_channel_multiply_factor)
+            ]
+        )
+        self.c_proj = nn.ModuleList(
+            [
                 Conv1D(
                     self.embed_dim,
                     self.embed_dim,
                     init_bias=config.init_attn_proj_bias,
                 )
-            )
-        # # edit channel width specifies
-        # self.c_attn = Conv1D(
-        #     2 * self.embed_dim * self.config.edit_channel_multiply_factor,
-        #     self.embed_dim,
-        #     init_bias=config.init_attn_proj_bias,
-        # )
-        # self.q_attn = Conv1D(
-        #     self.embed_dim * self.config.edit_channel_multiply_factor,
-        #     self.embed_dim,
-        #     init_bias=config.init_attn_proj_bias,
-        # )
-        # self.c_proj = Conv1D(
-        #     self.embed_dim,
-        #     self.embed_dim * self.config.edit_channel_multiply_factor,
-        #     init_bias=config.init_attn_proj_bias,
-        # )
+                for _ in range(config.edit_channel_multiply_factor)
+            ]
+        )
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
@@ -350,12 +338,10 @@ class EditorUnembedCrossAttention(nn.Module):
                     "Please make sure to instantiate class with `GPT2Attention(..., is_cross_attention=True)`."
                 )
         else:
-            #throw an error
-            print("Error: This class is only meant to be used as cross attention")
-            #query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
-        
+            raise ValueError("This class is only meant to be used as cross attention")
+            # query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+
         for i in range(self.config.edit_channel_multiply_factor):
-            
             query = self.q_attn[i](encoder_hidden_states)
             # We only take the last position hidden state from the editor
             key, value = self.c_attn[i](hidden_states[:, -1, :]).split(
@@ -401,7 +387,9 @@ class EditorUnembedCrossAttention(nn.Module):
 
             # unmerge the head and batch dimension
             attn_output = attn_output.reshape(bsz, num_heads, -1, head_dim)
-            attn_output = self._merge_heads(attn_output, self.heads_per_multiply, self.head_dim)
+            attn_output = self._merge_heads(
+                attn_output, self.heads_per_multiply, self.head_dim
+            )
             attn_output = self.c_proj[i](attn_output)
             attn_output = self.resid_dropout(attn_output)
 
@@ -410,20 +398,26 @@ class EditorUnembedCrossAttention(nn.Module):
                 if output_attentions:
                     outputs += (attn_weights,)
             else:
-                #print(outputs[0][0])
+                # print(outputs[0][0])
                 outputs[0][0] += attn_output[0]
                 if use_cache is True:
-                    print("Error, key-value caching for this is not implemented. Should we even be doing this? -Mike")
-                    #outputs[1] = ( torch.stack( (outputs[1][0], present[0]) ), torch.stack( (outputs[1][1] , present[1]))) #genuinely unsure what the stacking axes should be!
+                    print(
+                        "Error, key-value caching for this is not implemented. Should we even be doing this? -Mike"
+                    )
+                    # outputs[1] = ( torch.stack( (outputs[1][0], present[0]) ), torch.stack( (outputs[1][1] , present[1]))) #genuinely unsure what the stacking axes should be!
                 if output_attentions:
-                    #Check stacking dimensions! 
-                    #Find which dimension of attn_weights is equal to the number of heads per multiply
-                    #Then stack along that dimension
-                    #Don't use number of heads equal to 786 until this is cleared up!
-                    stacking_dim = torch.argmax(attn_weights.shape == self.heads_per_multiply)
+                    # Check stacking dimensions!
+                    # Find which dimension of attn_weights is equal to the number of heads per multiply
+                    # Then stack along that dimension
+                    # Don't use number of heads equal to 786 until this is cleared up!
+                    stacking_dim = torch.argmax(
+                        attn_weights.shape == self.heads_per_multiply
+                    )
                     print("stacking dimension is")
                     print(stacking_dim)
-                    outputs[2] = torch.stack((outputs[2], attn_weights), dim=stacking_dim)
+                    outputs[2] = torch.stack(
+                        (outputs[2], attn_weights), dim=stacking_dim
+                    )
 
         return outputs  # a, present, (attentions)
 
@@ -485,8 +479,8 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
 
-        #set device for input_ids to cuda ?
-        #input_ids = input_ids.to(self.lm_head.weight.device)
+        # set device for input_ids to cuda ?
+        # input_ids = input_ids.to(self.lm_head.weight.device)
 
         transformer_outputs = self.transformer(
             input_ids,

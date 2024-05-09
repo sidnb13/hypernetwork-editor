@@ -204,7 +204,7 @@ def get_dataloader(
     dataset: datasets.Dataset, config: DictConfig, split: str
 ) -> DataLoader:
     #Mike: I was getting a device error from the RNG generator being on CPU by default before before so I added this and imported torch
-    generator = torch.Generator(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    # generator = torch.Generator(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
     return DataLoader(
         dataset,
@@ -212,7 +212,7 @@ def get_dataloader(
         if "train" in split
         else config.train.validation_batch_size,
         shuffle=True if "train" in split else False,
-        generator=generator, #also added this line, see comment above
+        # generator=generator, #also added this line, see comment above
     )
 
 

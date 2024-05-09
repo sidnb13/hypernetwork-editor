@@ -13,8 +13,8 @@ from train_utils import train
 #should I need to do this? 
 #trying to solve:
 # RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0! (when checking argument for argument mat1 in method wrapper_CUDA_addmm)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(config: DictConfig):
