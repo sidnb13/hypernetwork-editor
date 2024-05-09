@@ -28,6 +28,19 @@ class EditorModelOutput(BaseModelOutput):
     editor_attention: Optional[torch.Tensor] = None
 
 
+def compute_position_ids(attn_mask: torch.LongTensor) -> torch.Tensor:
+    """Compute position ids for GPT2, given padded attention mask."""
+    unmasked_len = attn_mask.sum(-1, keepdim=True)
+    position_ids = (
+        torch.arange(0, attn_mask.shape[-1], device=attn_mask.device)
+        .unsqueeze(0)
+        .repeat(unmasked_len.shape[0], 1)
+    )
+    position_ids -= unmasked_len
+    position_ids[position_ids < 0] = 0
+    return position_ids
+
+
 @contextlib.contextmanager
 def add_fwd_hooks(module_hooks):
     """

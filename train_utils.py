@@ -229,7 +229,7 @@ def load_model_checkpoint(
     scheduler.load_state_dict(state_dict["scheduler"])
 
 
-def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int):
+def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int = None):
     if edit_stop_idx is not None:
         edit_vector_norm = out.edit_vectors.norm(dim=-1)[:, :edit_stop_idx]
     else:
@@ -306,17 +306,21 @@ def compute_kl_loss(
     ).sum(-1)
 
     kl_div_loss = kl_div_loss.mean()
-    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
+    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx).mean()
 
     # gather from all ranks
     if dist.is_initialized():
         dist.all_reduce(kl_div_loss, op=dist.ReduceOp.SUM)
         dist.all_reduce(penalty_loss, op=dist.ReduceOp.SUM)
 
+    # normalize kl by batch size
+    kl_div_loss = kl_div_loss / world_size
+    penalty_loss = penalty_loss / world_size
+
     return (
-        kl_div_loss + penalty_loss.mean(),
+        kl_div_loss + penalty_loss,
         kl_div_loss,
-        penalty_loss.mean(),
+        penalty_loss,
     )
 
 
@@ -356,13 +360,15 @@ def compute_ce_loss(
     else:
         ce_loss = -(per_token_logps * loss_mask).sum(-1)
 
-    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx)
+    penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx).mean()
 
     # gather from all ranks
     if dist.is_initialized():
         dist.all_reduce(ce_loss, op=dist.ReduceOp.SUM)
         dist.all_reduce(penalty_loss, op=dist.ReduceOp.SUM)
 
-    loss = ce_loss.mean() + penalty_loss.mean()
+    ce_loss = ce_loss / world_size
+    penalty_loss = penalty_loss / world_size
 
-    return loss, ce_loss.mean(), penalty_loss.mean()
+    loss = ce_loss + penalty_loss
+    return loss, ce_loss, penalty_loss

@@ -19,8 +19,8 @@ train:
   steps: -1
   warmup_steps: 0.1
   epochs: 1
-  train_batch_size: 2
-  validation_batch_size: 2
+  train_batch_size: 8
+  validation_batch_size: 4
   scheduler: constant
   optim: AdamW
   adam_beta1: 0.9

@@ -6,6 +6,10 @@ ipykernel
 hydra-core
 wandb
 jupyter
+flash
 
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch
+
+--no-build-isolation
+flash-attn
