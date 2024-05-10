@@ -4,7 +4,6 @@ from typing import Dict
 
 import torch
 import torch.distributed as dist
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -16,6 +15,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+import wandb
 from helpers import concat_and_pad_ids, slice_and_move_batch_for_device
 from logger import get_logger
 from models.gpt2 import GPT2Editor
@@ -83,9 +83,13 @@ def train(
     else:
         raise ValueError(f"Unknown scheduler: {config.train.scheduler}")
 
+    start_step = 0
+
     # wandb setup
     if config.wandb.resume and config.wandb.run_id:
-        load_model_checkpoint(rank, config.ckpt_folder, editor, opt, scheduler, config)
+        start_step = load_model_checkpoint(
+            rank, config.ckpt_folder, editor, opt, scheduler, config
+        )
     elif config.wandb.enabled and rank == 0:
         wandb.init(
             project=config.wandb.project,
@@ -99,10 +103,20 @@ def train(
     # training
     train_itr = itertools.cycle(train_dataloader)
     val_itr = itertools.cycle(validation_dataloader)
+
+    # skip start_steps
+    for i in range(start_step):
+        next(train_itr)
+        if i > 0 and i % config.train.eval_interval == 0:
+            next(val_itr)
+
+    if start_step > 0:
+        logger.info(f"Skipped {start_step} steps...")
+
     grad_acc_steps = 0
     train_examples_counter = val_examples_counter = 0
 
-    for step in range(total_steps):
+    for step in range(start_step, total_steps):
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
@@ -213,7 +227,7 @@ def load_model_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     config: DictConfig,
-):
+) -> int:
     """Load a model checkpoint and resume wandb run."""
     if rank == 0 and config.wandb.enabled and config.wandb.resume:
         wandb.init(
@@ -227,6 +241,8 @@ def load_model_checkpoint(
     model.hypernetwork.load_state_dict(state_dict["hypernetwork"])
     optimizer.load_state_dict(state_dict["opt"])
     scheduler.load_state_dict(state_dict["scheduler"])
+
+    return state_dict["step"]
 
 
 def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int = None):

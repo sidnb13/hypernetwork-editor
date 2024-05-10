@@ -227,9 +227,9 @@ class GPT2Editor(nn.Module):
 
             # Multiply the outputs by normalization factors
             if output_editor_attention:
-                temp_edit_vectors, batch_editor_attention = editor_output
+                temp_edit_vectors, _, batch_editor_attention = editor_output
             else:
-                temp_edit_vectors = editor_output[0]
+                temp_edit_vectors, _ = editor_output
 
             # Renormalize to the scale of the target hidden states
             # and reshape to proper dimensions

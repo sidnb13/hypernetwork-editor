@@ -11,7 +11,7 @@ from transformers.modeling_outputs import BaseModelOutput
 
 class EditorConfig(PretrainedConfig):
     name_or_path: str = "gpt2"
-    edit_channel_width_factor: int = 2
+    edit_channel_multiply_factor: int = 2
     chop_editor_at_layer: int = -1
     num_editing_heads: int = 32
     use_layerwise_embeddings: bool = True
