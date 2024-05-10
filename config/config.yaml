@@ -50,7 +50,7 @@ data:
 wandb:
   enabled: false
   project: hypernetwork-editor
-  entity: sidnb13
+  entity: ${oc.env:WANDB_ENTITY,sidnbaskaran}
   tags: []
   group: null
   run_id: null

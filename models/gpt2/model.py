@@ -183,6 +183,16 @@ class GPT2Editor(nn.Module):
         stop_editing_idx: int = None,
         batch_edit_vectors: torch.Tensor = None,
     ) -> EditorModelOutput:
+        # print("devices for all args")
+        # print(editor_input_ids.device)
+        # print(editor_attention_mask.device)
+        # print(target_input_ids.device)
+        # print(target_attention_mask.device)
+        # if target_hidden_states is not None:
+        #     print(target_hidden_states.device)
+        # if batch_edit_vectors is not None:
+        #     print(batch_edit_vectors.device)
+
         # Run target model for encoded hidden states
         if target_hidden_states is None:
 
@@ -272,9 +282,9 @@ class GPT2Editor(nn.Module):
 
             # Multiply the outputs by normalization factors
             if output_editor_attention:
-                temp_edit_vectors, batch_editor_attention = editor_output
+                temp_edit_vectors, _, batch_editor_attention = editor_output
             else:
-                temp_edit_vectors = editor_output[0]
+                temp_edit_vectors, _ = editor_output
 
             # Renormalize to the scale of the target hidden states
             # and reshape to proper dimensions

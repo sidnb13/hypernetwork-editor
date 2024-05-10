@@ -241,14 +241,13 @@ class EditorUnembedCrossAttention(GPT2Attention):
                     # Find which dimension of attn_weights is equal to the number of heads per multiply
                     # Then stack along that dimension
                     # Don't use number of heads equal to 786 until this is cleared up!
-                    stacking_dim = torch.argmax(
-                        attn_weights.shape == self.heads_per_multiply
-                    )
-                    print("stacking dimension is")
-                    print(stacking_dim)
-                    outputs[2] = torch.stack(
+                    stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
+                    print("stacking dimension is", stacking_dim)
+                    attn_output, present = outputs[0], outputs[1]
+                    attn_weights = torch.stack(
                         (outputs[2], attn_weights), dim=stacking_dim
                     )
+                    outputs = (attn_output, present, attn_weights)
 
         return outputs  # a, present, (attentions)
 
