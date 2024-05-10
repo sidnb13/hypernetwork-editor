@@ -170,6 +170,16 @@ class GPT2Editor(nn.Module):
         stop_editing_idx: int = None,
         batch_edit_vectors: torch.Tensor = None,
     ) -> EditorModelOutput:
+        # print("devices for all args")
+        # print(editor_input_ids.device)
+        # print(editor_attention_mask.device)
+        # print(target_input_ids.device)
+        # print(target_attention_mask.device)
+        # if target_hidden_states is not None:
+        #     print(target_hidden_states.device)
+        # if batch_edit_vectors is not None:
+        #     print(batch_edit_vectors.device)
+
         # Run target model for encoded hidden states
         if target_hidden_states is None:
             target_hidden_states = torch.stack(

@@ -9,6 +9,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from transformers import (
+    AutoTokenizer,
     get_constant_schedule,
     get_constant_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
@@ -16,7 +17,11 @@ from transformers import (
 )
 
 import wandb
-from helpers import concat_and_pad_ids, slice_and_move_batch_for_device
+from helpers import (
+    concat_and_pad_ids,
+    slice_and_move_batch_for_device,
+    visualize_attn_heatmap,
+)
 from logger import get_logger
 from models.gpt2 import GPT2Editor
 from models.utils import EditorModelOutput
@@ -50,6 +55,8 @@ def train(
         editor = DDP(editor.to(rank), device_ids=[rank])
     else:
         editor = editor.to(rank)
+
+    tokenizer = AutoTokenizer.from_pretrained(config.model.name_or_path)
 
     opt = torch.optim.Adam(
         editor.parameters(),
@@ -87,6 +94,7 @@ def train(
 
     # wandb setup
     if config.wandb.resume and config.wandb.run_id:
+        logger.info("Resuming run from checkpoint")
         start_step = load_model_checkpoint(
             rank, config.ckpt_folder, editor, opt, scheduler, config
         )
@@ -115,6 +123,10 @@ def train(
 
     grad_acc_steps = 0
     train_examples_counter = val_examples_counter = 0
+
+    logger.info(
+        f"Training for {total_steps - start_step} ({start_step}, {total_steps}) steps..."
+    )
 
     for step in range(start_step, total_steps):
         train_batch = next(train_itr)
@@ -161,7 +173,7 @@ def train(
                 batch_metrics["kl/train"] = kl_loss.detach().item()
 
             if rank == 0 and (step > 0 and step % config.train.log_interval == 0):
-                print(batch_metrics)
+                logger.info(batch_metrics)
                 if config.wandb.enabled:
                     wandb.log(batch_metrics)
 
@@ -173,12 +185,20 @@ def train(
                 val_batch = next(val_itr)
                 if config.train.loss == "kl":
                     loss, kl_loss, penalty_loss = compute_kl_loss(
-                        editor, val_batch, rank, world_size
+                        editor,
+                        val_batch,
+                        rank,
+                        world_size,
+                        stop_editing_idx=config.train.stop_editing_idx,
                     )
                     batch_metrics["kl/val"] = kl_loss.detach().item()
                 else:
                     loss, ce_loss, penalty_loss = compute_ce_loss(
-                        editor, val_batch, rank, world_size
+                        editor,
+                        val_batch,
+                        rank,
+                        world_size,
+                        stop_editing_idx=config.train.stop_editing_idx,
                     )
                     batch_metrics["ce/val"] = ce_loss.detach().item()
 
@@ -186,15 +206,53 @@ def train(
             batch_metrics["loss/val"] = (
                 loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
             )
+            logger.info(batch_metrics)
 
-            val_examples_counter += len(val_batch[next(iter(val_batch.keys()))])
+            # save attention visualizations
+            editor_out = editor(
+                **slice_and_move_batch_for_device(val_batch, rank, world_size),
+                stop_editing_idx=config.train.stop_editing_idx,
+                output_target_hidden_states=True,
+                output_edited_hidden_states=True,
+                output_edit_vectors=True,
+            )
+            if rank == 0:
+                logger.debug(f"Saving attention heatmaps for step {step}")
+                # gather results from ranks, use global batch for predictions
+                if dist.is_initialized():
+                    editor_out.logits = torch.cat(dist.gather(editor_out.logits), dim=0)
+                    editor_out.target_hidden_states = torch.cat(
+                        dist.gather(editor_out.target_hidden_states), dim=0
+                    )
+                    editor_out.edited_hidden_states = torch.cat(
+                        dist.gather(editor_out.edited_hidden_states), dim=0
+                    )
+                    editor_out.edit_vectors = torch.cat(
+                        dist.gather(editor_out.edit_vectors), dim=0
+                    )
+                    editor_out.editor_attention = torch.cat(
+                        dist.gather(editor_out.editor_attention), dim=0
+                    )
 
-        if (
-            rank == 0
-            and (step > 0 and step % config.train.save_interval == 0)
-            and config.train.do_save
-        ):
+                visualize_attn_heatmap(
+                    result=editor_out,
+                    batch=val_batch,
+                    save_path=os.path.join(
+                        config.ckpt_dir, config.exp_name, "step-{}".format(step)
+                    ),
+                    tokenizer=tokenizer,
+                    stopping_index=config.train.stop_editing_idx,
+                    metadata=config,
+                )
+
+        if config.train.do_save and step > 0 and step % config.train.save_interval == 0:
             save_model_checkpoint(step, editor, opt, scheduler, config)
+
+    logger.info("Finished training")
+
+    if config.train.do_save:
+        logger.info("Saving final model checkpoint")
+        save_model_checkpoint(step + 1, editor, opt, scheduler, config)
 
     if config.train.use_ddp:
         cleanup()
@@ -216,7 +274,10 @@ def save_model_checkpoint(
     }
     ckpt_folder = os.path.join(config.ckpt_dir, config.exp_name, "step-{}".format(step))
     os.makedirs(ckpt_folder, exist_ok=True)
-    torch.save(state_dict, ckpt_folder)
+    torch.save(state_dict, os.path.join(ckpt_folder, "checkpoint.pt"))
+
+    logger.info("Saved model checkpoint to {}".format(ckpt_folder))
+
     OmegaConf.save(config, os.path.join(ckpt_folder, "config.yaml"))
 
 
@@ -230,6 +291,7 @@ def load_model_checkpoint(
 ) -> int:
     """Load a model checkpoint and resume wandb run."""
     if rank == 0 and config.wandb.enabled and config.wandb.resume:
+        logger.info("Resuming wandb run")
         wandb.init(
             project=config.wandb.project,
             entity=config.wandb.entity,
@@ -237,7 +299,10 @@ def load_model_checkpoint(
             id=config.wandb.run_id,
         )
 
-    state_dict = torch.load(ckpt_folder, map_location=rank)
+    state_dict = torch.load(
+        os.path.join(ckpt_folder, "checkpoint.pt"), map_location=rank
+    )
+    logger.info("Loaded model checkpoint from {}".format(ckpt_folder))
     model.hypernetwork.load_state_dict(state_dict["hypernetwork"])
     optimizer.load_state_dict(state_dict["opt"])
     scheduler.load_state_dict(state_dict["scheduler"])
@@ -275,9 +340,6 @@ def compute_kl_loss(
     )
 
     edited_target_logps = torch.nn.functional.log_softmax(editor_out.logits, dim=-1)
-
-    # print("EDITED TARGET LOGITS SHAPE", edited_target_logps.shape)
-
     edit_target_mask = batch["target_attention_mask"] > 0
 
     # compute soft labels
