@@ -31,6 +31,7 @@ def main(config: DictConfig):
         use_layerwise_embeddings=config.model.use_layerwise_embeddings,
         edit_dampening_factor=config.model.edit_dampening_factor,
         kill_token_zero=config.model.kill_token_zero,
+        use_ghost_token=config.model.use_ghost_token,
     )
     editor_model = GPT2Editor(model_config)
 
