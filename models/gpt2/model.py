@@ -22,7 +22,6 @@ from ..utils import (
 )
 from .layers import EditorUnembedCrossAttention
 
-
 class GPT2EditorConfig(GPT2Config, EditorConfig):
     init_attn_proj_bias: bool = False
     compute_position_ids: bool = True
@@ -145,14 +144,27 @@ class GPT2Editor(nn.Module):
 
     @torch.no_grad()
     def _run_target_model_for_encoded_hidden_states(
-        self, target_input_ids: torch.Tensor, target_attention_mask: torch.Tensor
+        self, target_input_ids: torch.Tensor, 
+        target_attention_mask: torch.Tensor,
+        position_ids: torch.Tensor = None,
     ):
         """Gets the hidden states from the target model, if necessary"""
-        outputs = self.target_model(
-            input_ids=target_input_ids,
-            attention_mask=target_attention_mask,
-            output_hidden_states=True,
-        )
+        
+        if position_ids is not None:
+            outputs = self.target_model(
+                input_ids=target_input_ids,
+                attention_mask=target_attention_mask,
+                position_ids=position_ids,
+                output_hidden_states=True,
+            )
+
+        else:
+            outputs = self.target_model(
+                input_ids=target_input_ids,
+                attention_mask=target_attention_mask,
+                output_hidden_states=True,
+            )
+
         hidden_states = outputs.hidden_states
         return hidden_states
 
@@ -163,6 +175,7 @@ class GPT2Editor(nn.Module):
         target_input_ids: torch.Tensor = None,
         target_attention_mask: torch.Tensor = None,
         target_hidden_states: torch.Tensor = None,
+        target_position_ids: torch.Tensor = None,
         output_target_hidden_states: bool = False,
         output_edited_hidden_states: bool = False,
         output_edit_vectors: bool = False,
@@ -172,12 +185,43 @@ class GPT2Editor(nn.Module):
     ) -> EditorModelOutput:
         # Run target model for encoded hidden states
         if target_hidden_states is None:
-            target_hidden_states = torch.stack(
-                self._run_target_model_for_encoded_hidden_states(
-                    target_input_ids, target_attention_mask
-                ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
-                dim=2,
-            )
+
+            # Add a ghost token to the input_ids and turn off its attention mask
+            if self.config.use_ghost_token == True:
+                ghost_token = torch.zeros_like(target_input_ids[:, 0:1])
+                target_input_ids = torch.cat((ghost_token, target_input_ids), dim=1)
+                ghost_invisible_attention_mask = torch.cat(
+                    (torch.zeros_like(ghost_token), target_attention_mask), dim=1
+                )
+                ghost_present_attention_mask = torch.cat(
+                    (torch.ones_like(ghost_token), target_attention_mask), dim=1
+                )
+
+                #This is altered! We give a position_id of 42 to the ghost token by default.
+                if target_position_ids is None:
+                    # create position_ids on the fly for batch generation
+                    target_position_ids = ghost_invisible_attention_mask.long().cumsum(-1) - 1
+                    target_position_ids.masked_fill_(ghost_invisible_attention_mask == 0, 1)
+                    target_position_ids[:, 0] = torch.full_like(target_position_ids[:, 0], 42)
+                    # we aren't using past_key_values I assume. If we did, we'd use something like:
+                    # if past_key_values:
+                    #     position_ids = position_ids[:, -input_ids.shape[1] :]
+                    
+                target_hidden_states = torch.stack(
+                    self._run_target_model_for_encoded_hidden_states(
+                        target_input_ids, 
+                        target_attention_mask = ghost_invisible_attention_mask,
+                        position_ids = target_position_ids
+                    ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
+                    dim=2,
+                )
+            else:
+                target_hidden_states = torch.stack(
+                    self._run_target_model_for_encoded_hidden_states(
+                        target_input_ids, target_attention_mask
+                    ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
+                    dim=2,
+                )
         # dimensions of target_hidden_states:
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
 
@@ -218,6 +262,7 @@ class GPT2Editor(nn.Module):
                     target_hidden_states.shape[3],
                 )
 
+           
             editor_output = self.hypernetwork(
                 input_ids=editor_input_ids,
                 attention_mask=editor_attention_mask,
@@ -280,14 +325,23 @@ class GPT2Editor(nn.Module):
             for L in range(self.target_model.config.n_layer)
         ]
         hooks = hooks1 + hooks2
+
+        if self.config.use_ghost_token == True:
+            target_attention_mask = ghost_present_attention_mask
+
         with add_fwd_hooks(hooks):
             # THIS IS THE LINE WHERE THE MODEL IS CALLED (AND THE EDITOR IS CALLED AT
             # THE END OF `layer` AS A SIDE EFFECT)
             target_result = self.target_model(
                 input_ids=target_input_ids,
-                attention_mask=target_attention_mask,
+                attention_mask= target_attention_mask,
+                position_ids=target_position_ids,
                 output_hidden_states=output_edited_hidden_states,
             )
+
+        #Drop the outputs atop the ghost token
+        if self.config.use_ghost_token == True:
+            target_result.logits = target_result.logits[:, 1:, :]
 
         logits = target_result.logits
 
