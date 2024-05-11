@@ -213,7 +213,6 @@ def train(
                 **slice_and_move_batch_for_device(val_batch, rank, world_size),
                 stop_editing_idx=config.train.stop_editing_idx,
                 output_target_hidden_states=True,
-                output_edited_hidden_states=True,
                 output_edit_vectors=True,
                 output_editor_attention=True,
             )
@@ -229,13 +228,6 @@ def train(
                         torch.zeros_like(editor_out.target_hidden_states)
                         for _ in range(world_size)
                     ]
-                    gathered_edited_hidden_states = [
-                        tuple(
-                            torch.zeros_like(item)
-                            for item in editor_out.edited_hidden_states
-                        )
-                        for _ in range(world_size)
-                    ]
                     gathered_edit_vectors = [
                         torch.zeros_like(editor_out.edit_vectors)
                         for _ in range(world_size)
@@ -248,17 +240,13 @@ def train(
                     (
                         gathered_logits,
                         gathered_target_hidden_states,
-                        gathered_edited_hidden_states,
                         gathered_edit_vectors,
                         gathered_editor_attention,
-                    ) = None, None, None, None, None
+                    ) = None, None, None, None
 
                 dist.gather(editor_out.logits, gathered_logits)
                 dist.gather(
                     editor_out.target_hidden_states, gathered_target_hidden_states
-                )
-                dist.gather_object(
-                    editor_out.edited_hidden_states, gathered_edited_hidden_states
                 )
                 dist.gather(editor_out.edit_vectors, gathered_edit_vectors)
                 dist.gather(editor_out.editor_attention, gathered_editor_attention)
@@ -266,10 +254,7 @@ def train(
             if rank == 0:
                 editor_out.logits = torch.cat(gathered_logits, dim=0)
                 editor_out.target_hidden_states = torch.cat(
-                    gathered_edited_hidden_states, dim=0
-                )
-                editor_out.edited_hidden_states = torch.cat(
-                    gathered_edited_hidden_states, dim=0
+                    gathered_target_hidden_states, dim=0
                 )
                 editor_out.edit_vectors = torch.cat(gathered_edit_vectors, dim=0)
                 editor_out.editor_attention = torch.cat(
