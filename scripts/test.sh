@@ -1,0 +1,15 @@
+#!/bin/bash
+
+python3 main.py \
+    mode=train \
+    task=wikipedia \
+    exp_name=test \
+    ++train.loss=kl \
+    ++train.use_ddp=true \
+    ++train.log_interval=5 \
+    ++train.eval_inerval=50 \
+    ++train.do_save=false \
+    ++train.lr=1e-6 \
+    ++train.scheduler=cosine \
+    ++wandb.enabled=false \
+    ++train.steps=100 \

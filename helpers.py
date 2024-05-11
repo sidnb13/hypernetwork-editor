@@ -7,6 +7,7 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer
 

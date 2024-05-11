@@ -215,25 +215,66 @@ def train(
                 output_target_hidden_states=True,
                 output_edited_hidden_states=True,
                 output_edit_vectors=True,
+                output_editor_attention=True,
             )
-            if rank == 0:
-                logger.debug(f"Saving attention heatmaps for step {step}")
-                # gather results from ranks, use global batch for predictions
-                if dist.is_initialized():
-                    editor_out.logits = torch.cat(dist.gather(editor_out.logits), dim=0)
-                    editor_out.target_hidden_states = torch.cat(
-                        dist.gather(editor_out.target_hidden_states), dim=0
-                    )
-                    editor_out.edited_hidden_states = torch.cat(
-                        dist.gather(editor_out.edited_hidden_states), dim=0
-                    )
-                    editor_out.edit_vectors = torch.cat(
-                        dist.gather(editor_out.edit_vectors), dim=0
-                    )
-                    editor_out.editor_attention = torch.cat(
-                        dist.gather(editor_out.editor_attention), dim=0
-                    )
+            logger.debug(f"Saving attention heatmaps for step {step}")
 
+            # gather results from ranks, use global batch for predictions
+            if dist.is_initialized():
+                if rank == 0:
+                    gathered_logits = [
+                        torch.zeros_like(editor_out.logits) for _ in range(world_size)
+                    ]
+                    gathered_target_hidden_states = [
+                        torch.zeros_like(editor_out.target_hidden_states)
+                        for _ in range(world_size)
+                    ]
+                    gathered_edited_hidden_states = [
+                        tuple(
+                            torch.zeros_like(item)
+                            for item in editor_out.edited_hidden_states
+                        )
+                        for _ in range(world_size)
+                    ]
+                    gathered_edit_vectors = [
+                        torch.zeros_like(editor_out.edit_vectors)
+                        for _ in range(world_size)
+                    ]
+                    gathered_editor_attention = [
+                        torch.zeros_like(editor_out.editor_attention)
+                        for _ in range(world_size)
+                    ]
+                else:
+                    (
+                        gathered_logits,
+                        gathered_target_hidden_states,
+                        gathered_edited_hidden_states,
+                        gathered_edit_vectors,
+                        gathered_editor_attention,
+                    ) = None, None, None, None, None
+
+                dist.gather(editor_out.logits, gathered_logits)
+                dist.gather(
+                    editor_out.target_hidden_states, gathered_target_hidden_states
+                )
+                dist.gather_object(
+                    editor_out.edited_hidden_states, gathered_edited_hidden_states
+                )
+                dist.gather(editor_out.edit_vectors, gathered_edit_vectors)
+                dist.gather(editor_out.editor_attention, gathered_editor_attention)
+
+            if rank == 0:
+                editor_out.logits = torch.cat(gathered_logits, dim=0)
+                editor_out.target_hidden_states = torch.cat(
+                    gathered_edited_hidden_states, dim=0
+                )
+                editor_out.edited_hidden_states = torch.cat(
+                    gathered_edited_hidden_states, dim=0
+                )
+                editor_out.edit_vectors = torch.cat(gathered_edit_vectors, dim=0)
+                editor_out.editor_attention = torch.cat(
+                    gathered_editor_attention, dim=0
+                )
                 visualize_attn_heatmap(
                     result=editor_out,
                     batch=val_batch,
