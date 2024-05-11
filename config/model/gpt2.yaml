@@ -6,4 +6,4 @@ num_editing_heads: 32
 use_layerwise_embeddings: true
 edit_dampening_factor: 0.001
 kill_token_zero: false
-use_ghost_token: true
+use_ghost_token: false

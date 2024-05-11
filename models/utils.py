@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 from transformers import PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutput
 
