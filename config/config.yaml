@@ -8,6 +8,7 @@ mode: train
 out_dir: ./assets
 ckpt_dir: ${out_dir}/checkpoints
 data_dir: ${out_dir}/data
+resume_ckpt: null
 
 exp_name: null
 seed: 42

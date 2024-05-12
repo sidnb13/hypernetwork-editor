@@ -93,10 +93,10 @@ def train(
     start_step = 0
 
     # wandb setup
-    if config.wandb.resume and config.wandb.run_id:
+    if (config.wandb.resume and config.wandb.run_id) or config.resume_ckpt:
         logger.info("Resuming run from checkpoint")
         start_step = load_model_checkpoint(
-            rank, config.ckpt_folder, editor, opt, scheduler, config
+            rank, config.resume_ckpt, editor, opt, scheduler, config
         )
     elif config.wandb.enabled and rank == 0:
         wandb.init(
@@ -174,7 +174,7 @@ def train(
 
             if rank == 0 and (step > 0 and step % config.train.log_interval == 0):
                 logger.info(batch_metrics)
-                if config.wandb.enabled:
+                if wandb.run:
                     wandb.log(batch_metrics)
 
         if step > 0 and step % config.train.eval_interval == 0:
@@ -235,6 +235,9 @@ def evaluate(
     )
     logger.info(batch_metrics)
 
+    if wandb.run and rank == 0:
+        wandb.log(batch_metrics)
+
     # save attention visualizations
     editor_out = editor(
         **slice_and_move_batch_for_device(val_batch, rank, world_size),
@@ -288,7 +291,9 @@ def evaluate(
             batch=val_batch,
             save_path=os.path.join(
                 config.ckpt_dir, config.exp_name, "step-{}".format(step)
-            ),
+            )
+            if config.train.do_save
+            else None,
             tokenizer=tokenizer,
             stopping_index=config.train.stop_editing_idx,
             metadata=config,
@@ -297,14 +302,17 @@ def evaluate(
 
 def save_model_checkpoint(
     step,
-    model: GPT2Editor,
+    model: GPT2Editor | DDP,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     config: DictConfig,
 ):
     """Save a model checkpoint"""
+    if dist.is_initialized():
+        dist.barrier()
+    model_obj = model.module if isinstance(model, DDP) else model
     state_dict = {
-        "hypernetwork": model.hypernetwork.state_dict(),
+        "hypernetwork": model_obj.hypernetwork.state_dict(),
         "step": step,
         "opt": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
@@ -321,13 +329,13 @@ def save_model_checkpoint(
 def load_model_checkpoint(
     rank: int,
     ckpt_folder: str,
-    model: GPT2Editor,
+    model: GPT2Editor | DDP,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     config: DictConfig,
 ) -> int:
     """Load a model checkpoint and resume wandb run."""
-    if rank == 0 and config.wandb.enabled and config.wandb.resume:
+    if rank == 0 and config.wandb.enabled and config.wandb.run_id:
         logger.info("Resuming wandb run")
         wandb.init(
             project=config.wandb.project,
@@ -337,10 +345,11 @@ def load_model_checkpoint(
         )
 
     state_dict = torch.load(
-        os.path.join(ckpt_folder, "checkpoint.pt"), map_location=rank
+        os.path.join(ckpt_folder, "checkpoint.pt"), map_location=torch.device(rank)
     )
+    model_obj = model.module if isinstance(model, DDP) else model
+    model_obj.load_state_dict(state_dict["hypernetwork"])
     logger.info("Loaded model checkpoint from {}".format(ckpt_folder))
-    model.hypernetwork.load_state_dict(state_dict["hypernetwork"])
     optimizer.load_state_dict(state_dict["opt"])
     scheduler.load_state_dict(state_dict["scheduler"])
 

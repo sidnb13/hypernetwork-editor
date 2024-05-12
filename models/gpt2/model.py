@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Any, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -143,6 +143,12 @@ class GPT2Editor(nn.Module):
             )
         else:
             self.layerwise_embeddings = None
+
+    def load_state_dict(
+        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
+    ):
+        """Only load weights for the trainable hypernetwork."""
+        self.hypernetwork.load_state_dict(state_dict, strict=strict, assign=assign)
 
     @torch.no_grad()
     def _run_target_model_for_encoded_hidden_states(

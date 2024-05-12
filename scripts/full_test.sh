@@ -7,8 +7,8 @@ python3 main.py \
     ++train.loss=kl \
     ++train.use_ddp=true \
     ++train.log_interval=10 \
-    ++train.train_batch_size=16 \
-    ++train.validation_batch_size=16 \
+    ++train.train_batch_size=32 \
+    ++train.validation_batch_size=32 \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
