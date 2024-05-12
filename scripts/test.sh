@@ -7,9 +7,11 @@ python3 main.py \
     ++train.loss=kl \
     ++train.use_ddp=true \
     ++train.log_interval=5 \
-    ++train.eval_interval=10 \
+    ++train.eval_interval=20 \
+    ++train.train_batch_size=16 \
+    ++train.validation_batch_size=16 \
     ++train.do_save=false \
     ++train.lr=1e-6 \
     ++train.scheduler=cosine \
     ++wandb.enabled=false \
-    ++train.steps=100 \
+    ++train.steps=200 \

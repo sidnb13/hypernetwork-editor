@@ -40,20 +40,19 @@ def visualize_attn_heatmap(
 
     for batch_index in range(len(next(iter(batch.values())))):
         # The tensor norm comes in an stopping_indexnum_layers+1 matrix
-        edit_tensor = result.edit_vectors[batch_index].detach().cpu()
-        target_hidden = result.target_hidden_states[batch_index].detach().cpu()
+        edit_tensor = result.edit_vectors[batch_index].cpu()
+        target_hidden = result.target_hidden_states[batch_index].cpu()
 
-        edit_tensor[:stopping_index, :, :] = (
-            edit_tensor[:stopping_index, :, :]
-            / target_hidden[:stopping_index].norm(dim=2, keepdim=True).detach().cpu()
-        )
+        edit_tensor[:stopping_index, :, :] = edit_tensor[
+            :stopping_index, :, :
+        ] / target_hidden[:stopping_index].norm(dim=2, keepdim=True)
         edit_tensor_norm = edit_tensor.norm(dim=2).flip(1)
 
         # is this any better??
         # attention_matrix = result['editor_attention'][batch_index].reshape(104).to("cpu").reshape(13,8).permute(1,0)
 
         # Detach and convert to numpy
-        edit_tensor_norm = edit_tensor_norm.detach().numpy()[:stopping_index, :]
+        edit_tensor_norm = edit_tensor_norm.numpy()[:stopping_index, :]
 
         # Create the heatmap
         fig, ax = plt.subplots()
@@ -96,11 +95,11 @@ def visualize_attn_heatmap(
 
         # decode raw result
         select_logits = (
-            result.logits[batch_index, target_attn_mask][:stopping_index]
+            result.logits[batch_index, target_attn_mask][:stopping_index].cpu()
             if stopping_index
-            else result.logits[batch_index][target_attn_mask]
+            else result.logits[batch_index][target_attn_mask].cpu()
         )
-        editor_preds = torch.argmax(select_logits.softmax(-1), dim=-1).detach().cpu()
+        editor_preds = torch.argmax(select_logits.softmax(-1), dim=-1)
         editor_preds = tokenizer.batch_decode(editor_preds, skip_special_tokens=True)
 
         if show_plot:
@@ -118,6 +117,8 @@ def visualize_attn_heatmap(
         os.makedirs(batch_path, exist_ok=True)
 
         plt.savefig(batch_path / "attn_heatmap.png")
+        if not show_plot:
+            plt.close()
 
         with open(batch_path / "preds.json", "w") as f:
             preds = {

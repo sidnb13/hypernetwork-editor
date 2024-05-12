@@ -178,98 +178,16 @@ def train(
                     wandb.log(batch_metrics)
 
         if step > 0 and step % config.train.eval_interval == 0:
-            batch_metrics = {
-                "counters/val_examples": val_examples_counter,
-            }
-            with torch.no_grad():
-                val_batch = next(val_itr)
-                if config.train.loss == "kl":
-                    loss, kl_loss, penalty_loss = compute_kl_loss(
-                        editor,
-                        val_batch,
-                        rank,
-                        world_size,
-                        stop_editing_idx=config.train.stop_editing_idx,
-                    )
-                    batch_metrics["kl/val"] = kl_loss.detach().item()
-                else:
-                    loss, ce_loss, penalty_loss = compute_ce_loss(
-                        editor,
-                        val_batch,
-                        rank,
-                        world_size,
-                        stop_editing_idx=config.train.stop_editing_idx,
-                    )
-                    batch_metrics["ce/val"] = ce_loss.detach().item()
-
-            batch_metrics["loss/penalty"] = penalty_loss.detach().item()
-            batch_metrics["loss/val"] = (
-                loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
+            evaluate(
+                step,
+                val_examples_counter,
+                editor,
+                tokenizer,
+                val_itr,
+                rank,
+                world_size,
+                config,
             )
-            logger.info(batch_metrics)
-
-            # save attention visualizations
-            editor_out = editor(
-                **slice_and_move_batch_for_device(val_batch, rank, world_size),
-                stop_editing_idx=config.train.stop_editing_idx,
-                output_target_hidden_states=True,
-                output_edit_vectors=True,
-                output_editor_attention=True,
-            )
-            logger.debug(f"Saving attention heatmaps for step {step}")
-
-            # gather results from ranks, use global batch for predictions
-            if dist.is_initialized():
-                if rank == 0:
-                    gathered_logits = [
-                        torch.zeros_like(editor_out.logits) for _ in range(world_size)
-                    ]
-                    gathered_target_hidden_states = [
-                        torch.zeros_like(editor_out.target_hidden_states)
-                        for _ in range(world_size)
-                    ]
-                    gathered_edit_vectors = [
-                        torch.zeros_like(editor_out.edit_vectors)
-                        for _ in range(world_size)
-                    ]
-                    gathered_editor_attention = [
-                        torch.zeros_like(editor_out.editor_attention)
-                        for _ in range(world_size)
-                    ]
-                else:
-                    (
-                        gathered_logits,
-                        gathered_target_hidden_states,
-                        gathered_edit_vectors,
-                        gathered_editor_attention,
-                    ) = None, None, None, None
-
-                dist.gather(editor_out.logits, gathered_logits)
-                dist.gather(
-                    editor_out.target_hidden_states, gathered_target_hidden_states
-                )
-                dist.gather(editor_out.edit_vectors, gathered_edit_vectors)
-                dist.gather(editor_out.editor_attention, gathered_editor_attention)
-
-            if rank == 0:
-                editor_out.logits = torch.cat(gathered_logits, dim=0)
-                editor_out.target_hidden_states = torch.cat(
-                    gathered_target_hidden_states, dim=0
-                )
-                editor_out.edit_vectors = torch.cat(gathered_edit_vectors, dim=0)
-                editor_out.editor_attention = torch.cat(
-                    gathered_editor_attention, dim=0
-                )
-                visualize_attn_heatmap(
-                    result=editor_out,
-                    batch=val_batch,
-                    save_path=os.path.join(
-                        config.ckpt_dir, config.exp_name, "step-{}".format(step)
-                    ),
-                    tokenizer=tokenizer,
-                    stopping_index=config.train.stop_editing_idx,
-                    metadata=config,
-                )
 
         if config.train.do_save and step > 0 and step % config.train.save_interval == 0:
             save_model_checkpoint(step, editor, opt, scheduler, config)
@@ -282,6 +200,99 @@ def train(
 
     if config.train.use_ddp:
         cleanup()
+
+
+@torch.no_grad()
+def evaluate(
+    step, val_examples_counter, editor, tokenizer, val_itr, rank, world_size, config
+):
+    batch_metrics = {
+        "counters/val_examples": val_examples_counter,
+    }
+    val_batch = next(val_itr)
+    if config.train.loss == "kl":
+        loss, kl_loss, penalty_loss = compute_kl_loss(
+            editor,
+            val_batch,
+            rank,
+            world_size,
+            stop_editing_idx=config.train.stop_editing_idx,
+        )
+        batch_metrics["kl/val"] = kl_loss.detach().item()
+    else:
+        loss, ce_loss, penalty_loss = compute_ce_loss(
+            editor,
+            val_batch,
+            rank,
+            world_size,
+            stop_editing_idx=config.train.stop_editing_idx,
+        )
+        batch_metrics["ce/val"] = ce_loss.detach().item()
+
+    batch_metrics["loss/penalty"] = penalty_loss.detach().item()
+    batch_metrics["loss/val"] = (
+        loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
+    )
+    logger.info(batch_metrics)
+
+    # save attention visualizations
+    editor_out = editor(
+        **slice_and_move_batch_for_device(val_batch, rank, world_size),
+        stop_editing_idx=config.train.stop_editing_idx,
+        output_target_hidden_states=True,
+        output_edit_vectors=True,
+        output_editor_attention=True,
+    )
+    logger.debug(f"Saving attention heatmaps for step {step}")
+
+    # gather results from ranks, use global batch for predictions
+    if dist.is_initialized():
+        if rank == 0:
+            gathered_logits = [
+                torch.zeros_like(editor_out.logits) for _ in range(world_size)
+            ]
+            gathered_target_hidden_states = [
+                torch.zeros_like(editor_out.target_hidden_states)
+                for _ in range(world_size)
+            ]
+            gathered_edit_vectors = [
+                torch.zeros_like(editor_out.edit_vectors) for _ in range(world_size)
+            ]
+            gathered_editor_attention = [
+                torch.zeros_like(editor_out.editor_attention) for _ in range(world_size)
+            ]
+        else:
+            (
+                gathered_logits,
+                gathered_target_hidden_states,
+                gathered_edit_vectors,
+                gathered_editor_attention,
+            ) = None, None, None, None
+
+        dist.gather(editor_out.logits, gathered_logits)
+        dist.gather(editor_out.target_hidden_states, gathered_target_hidden_states)
+        dist.gather(editor_out.edit_vectors, gathered_edit_vectors)
+        dist.gather(editor_out.editor_attention, gathered_editor_attention)
+
+    if rank == 0:
+        if dist.is_initialized():
+            # move to cpu to prevent memory leaks
+            editor_out.logits = torch.cat(gathered_logits, dim=0)
+            editor_out.target_hidden_states = torch.cat(
+                gathered_target_hidden_states, dim=0
+            )
+            editor_out.edit_vectors = torch.cat(gathered_edit_vectors, dim=0)
+            editor_out.editor_attention = torch.cat(gathered_editor_attention, dim=0)
+        visualize_attn_heatmap(
+            result=editor_out,
+            batch=val_batch,
+            save_path=os.path.join(
+                config.ckpt_dir, config.exp_name, "step-{}".format(step)
+            ),
+            tokenizer=tokenizer,
+            stopping_index=config.train.stop_editing_idx,
+            metadata=config,
+        )
 
 
 def save_model_checkpoint(
