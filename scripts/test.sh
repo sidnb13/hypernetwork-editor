@@ -14,7 +14,6 @@ python3 main.py \
     ++train.do_save=true \
     ++train.lr=1e-6 \
     ++train.scheduler=cosine \
-    ++wandb.enabled=true \
-    ++wandb.run_id="vgwg1sby" \
-    ++train.steps=200 \
-    ++resume_ckpt="/home/sidnbaskaran/hypernetwork-editor/assets/checkpoints/test_20240512_163553/step-100"
+    ++wandb.enabled=false \
+    ++train.steps=100 \
+    # ++resume_ckpt="/home/sidnbaskaran/hypernetwork-editor/assets/checkpoints/test_20240512_163553/step-100"

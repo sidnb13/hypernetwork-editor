@@ -7,7 +7,6 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer
 
@@ -76,7 +75,6 @@ def visualize_attn_heatmap(
         # Add a title
         plt.title("Edit / Target Norm Heatmap")
 
-        # find first stopping_index non padding tokens
         target_attn_mask = batch["target_attention_mask"][batch_index]
         if stopping_index is None:
             editing_target_tokens = batch["target_input_ids"][batch_index]
@@ -92,12 +90,10 @@ def visualize_attn_heatmap(
         editor_input = tokenizer.convert_ids_to_tokens(
             batch["editor_input_ids"][batch_index], skip_special_tokens=True
         )
-
-        # decode raw result
         select_logits = (
-            result.logits[batch_index, target_attn_mask][:stopping_index].cpu()
+            result.logits[batch_index][target_attn_mask > 0][:stopping_index].cpu()
             if stopping_index
-            else result.logits[batch_index][target_attn_mask].cpu()
+            else result.logits[batch_index][target_attn_mask > 0].cpu()
         )
         editor_preds = torch.argmax(select_logits.softmax(-1), dim=-1)
         editor_preds = tokenizer.batch_decode(editor_preds, skip_special_tokens=True)
