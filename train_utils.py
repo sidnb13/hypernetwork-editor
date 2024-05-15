@@ -190,23 +190,20 @@ def train(
                 config,
             )
 
-        if (
-            rank == 0
-            and config.train.do_save
-            and step > 0
-            and step % config.train.save_interval == 0
-        ):
+        if config.train.do_save and step > 0 and step % config.train.save_interval == 0:
             if dist.is_initialized():
                 dist.barrier()
-            save_model_checkpoint(step, editor, opt, scheduler, config)
+            if rank == 0:
+                save_model_checkpoint(step, editor, opt, scheduler, config)
 
     logger.info("Finished training")
 
-    if rank == 0 and config.train.do_save:
+    if config.train.do_save:
         logger.info("Saving final model checkpoint")
         if dist.is_initialized():
             dist.barrier()
-        save_model_checkpoint(step + 1, editor, opt, scheduler, config)
+        if rank == 0:
+            save_model_checkpoint(step + 1, editor, opt, scheduler, config)
 
     if config.train.use_ddp:
         cleanup()

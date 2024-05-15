@@ -15,6 +15,6 @@ python3 main.py \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
-    ++train.lr=1e-6 \
+    ++train.lr=1e-4 \
     ++train.scheduler=cosine \
     ++wandb.enabled=true \
