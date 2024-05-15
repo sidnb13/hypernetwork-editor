@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
+    os.environ["MASTER_PORT"] = "12356"
 
     # initialize the process group
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -102,6 +102,7 @@ def train(
         wandb.init(
             project=config.wandb.project,
             name=config.exp_name,
+            notes=config.wandb.notes,
             config=dict(config),
             entity=config.wandb.entity,
             tags=config.wandb.tags,
@@ -189,13 +190,22 @@ def train(
                 config,
             )
 
-        if config.train.do_save and step > 0 and step % config.train.save_interval == 0:
+        if (
+            rank == 0
+            and config.train.do_save
+            and step > 0
+            and step % config.train.save_interval == 0
+        ):
+            if dist.is_initialized():
+                dist.barrier()
             save_model_checkpoint(step, editor, opt, scheduler, config)
 
     logger.info("Finished training")
 
-    if config.train.do_save:
+    if rank == 0 and config.train.do_save:
         logger.info("Saving final model checkpoint")
+        if dist.is_initialized():
+            dist.barrier()
         save_model_checkpoint(step + 1, editor, opt, scheduler, config)
 
     if config.train.use_ddp:
@@ -308,8 +318,7 @@ def save_model_checkpoint(
     config: DictConfig,
 ):
     """Save a model checkpoint"""
-    if dist.is_initialized():
-        dist.barrier()
+
     model_obj = model.module if isinstance(model, DDP) else model
     state_dict = {
         "hypernetwork": model_obj.hypernetwork.state_dict(),

@@ -38,8 +38,9 @@ def visualize_attn_heatmap(
             OmegaConf.save(metadata, save_path / "config.yaml")
 
     for batch_index in range(len(next(iter(batch.values())))):
-        # The tensor norm comes in an stopping_indexnum_layers+1 matrix
-        edit_tensor = result.edit_vectors[batch_index].cpu()
+        # The tensor norm comes in an stopping_index * num_layers+1 matrix
+        target_attn_mask = batch["target_attention_mask"][batch_index]
+        edit_tensor = result.edit_vectors[batch_index][target_attn_mask > 0].cpu()
         target_hidden = result.target_hidden_states[batch_index].cpu()
 
         edit_tensor[:stopping_index, :, :] = edit_tensor[
@@ -75,7 +76,6 @@ def visualize_attn_heatmap(
         # Add a title
         plt.title("Edit / Target Norm Heatmap")
 
-        target_attn_mask = batch["target_attention_mask"][batch_index]
         if stopping_index is None:
             editing_target_tokens = batch["target_input_ids"][batch_index]
         else:
@@ -124,6 +124,34 @@ def visualize_attn_heatmap(
             }
 
             json.dump(preds, f)
+
+
+def get_nb_trainable_parameters(model: torch.nn.Module) -> tuple[int, int]:
+    r"""
+    Returns the number of trainable parameters and the number of all parameters in the model.
+    """
+    trainable_params = 0
+    all_param = 0
+    for _, param in model.named_parameters():
+        num_params = param.numel()
+        # if using DS Zero 3 and the weights are initialized empty
+        if num_params == 0 and hasattr(param, "ds_numel"):
+            num_params = param.ds_numel
+
+        # Due to the design of 4bit linear layers from bitsandbytes
+        # one needs to multiply the number of parameters by 2 to get
+        # the correct number of parameters
+        if param.__class__.__name__ == "Params4bit":
+            num_bytes = (
+                param.quant_storage.itemsize if hasattr(param, "quant_storage") else 1
+            )
+            num_params = num_params * 2 * num_bytes
+
+        all_param += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+
+    return trainable_params, all_param
 
 
 def get_tokenizer(name_or_path):

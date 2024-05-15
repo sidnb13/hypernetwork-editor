@@ -7,14 +7,19 @@ import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
 
 from data import get_dataloader, get_task
+from helpers import get_nb_trainable_parameters
+from logger import get_logger
 from models.gpt2 import GPT2Editor, GPT2EditorConfig
 from train_utils import train
 
-#should I need to do this? 
-#trying to solve:
+logger = get_logger(__name__)
+
+# should I need to do this?
+# trying to solve:
 # RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0! (when checking argument for argument mat1 in method wrapper_CUDA_addmm)
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
+
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(config: DictConfig):
@@ -32,6 +37,7 @@ def main(config: DictConfig):
         edit_dampening_factor=config.model.edit_dampening_factor,
         kill_token_zero=config.model.kill_token_zero,
         use_ghost_token=config.model.use_ghost_token,
+        compute_position_ids=config.model.compute_position_ids,
     )
     editor_model = GPT2Editor(model_config)
 
@@ -41,6 +47,12 @@ def main(config: DictConfig):
         )
         validation_dataloader = get_dataloader(
             get_task(config, config.task.name, "val"), config, "val"
+        )
+
+        # print trainable params
+        trainable_params, all_params = get_nb_trainable_parameters(editor_model)
+        logger.info(
+            f"trainable/total params: {trainable_params} / {all_params} ({100 *trainable_params/all_params:.3f}%)"
         )
 
         # set experiment name

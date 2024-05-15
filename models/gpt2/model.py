@@ -131,6 +131,11 @@ class GPT2Editor(nn.Module):
         self.config = config
         self.hypernetwork = GPT2EditorHypernetwork(config)
         self.target_model = AutoModelForCausalLM.from_pretrained(config.name_or_path)
+
+        # freeze target model
+        for param in self.target_model.parameters():
+            param.requires_grad = False
+
         assign_layer_indices(self.target_model)
 
         if config.use_layerwise_embeddings:

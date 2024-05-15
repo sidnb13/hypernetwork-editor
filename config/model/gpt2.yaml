@@ -1,9 +1,10 @@
 name_or_path: gpt2
 max_length: 512
 edit_channel_multiply_factor: 2
-chop_editor_at_layer: -1
-num_editing_heads: 32
-use_layerwise_embeddings: true
-edit_dampening_factor: 0.001
+chop_editor_at_layer: 8
+num_editing_heads: 384
+use_layerwise_embeddings: false
+compute_position_ids: true
+edit_dampening_factor: 1.0e-4
 kill_token_zero: false
 use_ghost_token: false

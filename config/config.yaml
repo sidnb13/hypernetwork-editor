@@ -54,5 +54,6 @@ wandb:
   entity: ${oc.env:WANDB_ENTITY,sidnbaskaran}
   tags: []
   group: null
+  notes: null
   run_id: null
   resume: false
