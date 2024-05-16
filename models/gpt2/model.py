@@ -1,4 +1,4 @@
-from typing import Any, Mapping, Optional, Tuple, Union
+from typing import Any, Mapping, Optional, Tuple, Union, List
 
 import torch
 import torch.nn as nn
@@ -27,8 +27,10 @@ class GPT2EditorConfig(GPT2Config, EditorConfig):
     init_attn_proj_bias: bool = False
     compute_position_ids: bool = True
     use_ghost_token: bool = False
-
-
+    cross_attn_layers: List[int] = [] #mike: are these 3 lines necessary?
+    restrict_edit_to_layers: List[int] = []
+    restrict_edit_to_positions: List[int] = []
+    
 class GPT2EditorHypernetwork(GPT2LMHeadModel):
     _tied_weights_keys = []
 
@@ -48,7 +50,12 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
 
         # prune layers and add cross attn heads
         self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
+        if config.cross_attn_layers == []:
+            config.cross_attn_layers = list(range(config.chop_editor_at_layer))
+
         for i, layer in enumerate(self.transformer.h):
+            if i not in config.cross_attn_layers:
+                continue
             layer.crossattention = _attention_cls(
                 config=config, layer_idx=i, is_cross_attention=True
             )
@@ -347,6 +354,10 @@ class GPT2Editor(nn.Module):
                 ),
                 dim=1,
             )
+        
+        #testing the masking:
+        #print("batch_edit_vectors")
+        #print(batch_edit_vectors)
 
         # Run target model with edit vectors.
         # This adds the edit vectors to the given hidden state at the specified batch index, position, and layer

@@ -69,12 +69,9 @@ class EditorUnembedCrossAttention(GPT2Attention):
 
         self.embed_dim = config.n_embd
         self.num_heads = config.num_editing_heads
+        self.restrict_edit_to_layers = config.restrict_edit_to_layers
+        self.restrict_edit_to_positions = config.restrict_edit_to_positions
 
-        # Note by Mike: so, how to add more expressivity going forward?
-        # I think the natural thing to do is to add support for many more heads, by changing the
-        # matrix-mulitply code below, such that it effectively processes only d_embed of the attention channel at a time
-        # in a loop, adding the results of that part of the attention computation to the output tensor
-        # This will allow us to use much wider edit_channel_multiply_factor!
 
         assert (
             self.num_heads % config.edit_channel_multiply_factor == 0
@@ -178,6 +175,28 @@ class EditorUnembedCrossAttention(GPT2Attention):
             key, value = self.c_attn[i](hidden_states[:, -1, :]).split(
                 self.split_size, dim=-1
             )
+
+            #print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
+            #To construct the mask, we can write the mask in matrix form and then stack along d = 2
+
+            if self.restrict_edit_to_layers != []:
+                #initialize the mask
+                mask = torch.zeros(encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]//13, 13) #hard-coding the target model's layer count
+
+                for layer in self.restrict_edit_to_layers:
+                    mask[:, :, layer] = 1
+
+                for position in self.restrict_edit_to_positions:
+                    mask[:, position, :] = 1
+
+                #Havne't checked, but this next line should be effectively stacking the mask along d=2
+                mask = mask.reshape(encoder_hidden_states.shape[0], -1)
+
+                if encoder_attention_mask is not None:
+                    encoder_attention_mask = encoder_attention_mask * mask
+                else:
+                    encoder_attention_mask = mask
+
             attention_mask = encoder_attention_mask
 
             split_query = self._split_heads(query)
