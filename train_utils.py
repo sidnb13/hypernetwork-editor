@@ -134,12 +134,20 @@ def train(
         # compute loss
         if config.train.loss == "kl":
             loss, kl_loss, penalty_loss = compute_kl_loss(
-                editor, train_batch, rank, world_size
+                editor,
+                train_batch,
+                rank,
+                world_size,
+                stop_editing_idx=config.train.stop_editing_idx,
             )
             ce_loss = None
         else:
             loss, ce_loss, penalty_loss = compute_ce_loss(
-                editor, train_batch, rank, world_size
+                editor,
+                train_batch,
+                rank,
+                world_size,
+                stop_editing_idx=config.train.stop_editing_idx,
             )
             kl_loss = None
 

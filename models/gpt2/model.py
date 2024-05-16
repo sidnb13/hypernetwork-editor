@@ -256,14 +256,19 @@ class GPT2Editor(nn.Module):
 
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
-            unmasked_sizes = target_attention_mask.sum(-1)
+            unmasked_sizes = target_attention_mask.sum(-1).tolist()
             target_hidden_states_new = torch.zeros(
                 target_hidden_states.shape[0],
                 stop_editing_idx,
                 *target_hidden_states.shape[2:],
+                device=target_hidden_states.device,
+                dtype=target_hidden_states.dtype,
             )
+            
+            print(target_attention_mask)
+
             for i in range(target_hidden_states.shape[0]):
-                target_hidden_states_new[i, :, :, :] = target_hidden_states[
+                target_hidden_states_new[i] = target_hidden_states[
                     i, -unmasked_sizes[i] : -unmasked_sizes[i] + stop_editing_idx, :, :
                 ]
             target_hidden_states = target_hidden_states_new

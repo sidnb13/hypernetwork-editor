@@ -4,9 +4,9 @@ import math
 import os
 import re
 from typing import Any, Callable, List, Literal
-import torch
 
 import datasets
+import torch
 import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
@@ -142,6 +142,11 @@ def load_wikipedia(config: DictConfig):
         num_proc=os.cpu_count(),
         fn_kwargs={"tokenizer": tokenizer},
     )
+    # filter empty target sequences
+    limit = config.train.stop_editing_idx or 0
+    new_dataset = new_dataset.filter(
+        lambda row: sum(row["target_attention_mask"]) > limit, num_proc=os.cpu_count()
+    )
     new_dataset.set_format(
         "torch",
         columns=[
@@ -203,7 +208,7 @@ def shuffle_and_select(
 def get_dataloader(
     dataset: datasets.Dataset, config: DictConfig, split: str
 ) -> DataLoader:
-    #Mike: I was getting a device error from the RNG generator being on CPU by default before before so I added this and imported torch
+    # Mike: I was getting a device error from the RNG generator being on CPU by default before before so I added this and imported torch
     # generator = torch.Generator(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
     return DataLoader(
