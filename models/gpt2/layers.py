@@ -2,7 +2,6 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
 from transformers.models.gpt2.modeling_gpt2 import (
     GPT2Attention,
     _get_unpad_data,
@@ -71,7 +70,6 @@ class EditorUnembedCrossAttention(GPT2Attention):
         self.num_heads = config.num_editing_heads
         self.restrict_edit_to_layers = config.restrict_edit_to_layers
         self.restrict_edit_to_positions = config.restrict_edit_to_positions
-
 
         assert (
             self.num_heads % config.edit_channel_multiply_factor == 0
@@ -176,12 +174,16 @@ class EditorUnembedCrossAttention(GPT2Attention):
                 self.split_size, dim=-1
             )
 
-            #print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
-            #To construct the mask, we can write the mask in matrix form and then stack along d = 2
+            # print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
+            # To construct the mask, we can write the mask in matrix form and then stack along d = 2
 
             if self.restrict_edit_to_layers != []:
-                #initialize the mask
-                mask = torch.zeros(encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]//13, 13) #hard-coding the target model's layer count
+                # initialize the mask
+                mask = torch.zeros(
+                    encoder_hidden_states.shape[0],
+                    encoder_hidden_states.shape[1] // 13,
+                    13,
+                )  # hard-coding the target model's layer count
 
                 for layer in self.restrict_edit_to_layers:
                     mask[:, :, layer] = 1
@@ -189,7 +191,7 @@ class EditorUnembedCrossAttention(GPT2Attention):
                 for position in self.restrict_edit_to_positions:
                     mask[:, position, :] = 1
 
-                #Havne't checked, but this next line should be effectively stacking the mask along d=2
+                # Havne't checked, but this next line should be effectively stacking the mask along d=2
                 mask = mask.reshape(encoder_hidden_states.shape[0], -1)
 
                 if encoder_attention_mask is not None:
@@ -545,6 +547,6 @@ class OldEditorAttention(nn.Module):
         attn_output, attn_weights = self._new_reverse_attn(query, key, value)
 
         if output_attentions:
-            return (attn_output, attn_weights)
+            return (attn_output, None, attn_weights)
         else:
-            return (attn_output,)
+            return (attn_output, None)

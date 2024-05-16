@@ -83,11 +83,11 @@ def visualize_attn_heatmap(
                 target_attn_mask > 0
             ][:stopping_index]
 
-        editing_target = tokenizer.convert_ids_to_tokens(
+        editing_target = tokenizer.batch_decode(
             editing_target_tokens,
             skip_special_tokens=True,
         )
-        editor_input = tokenizer.convert_ids_to_tokens(
+        editor_input = tokenizer.batch_decode(
             batch["editor_input_ids"][batch_index], skip_special_tokens=True
         )
         select_logits = (

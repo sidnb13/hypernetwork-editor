@@ -7,13 +7,11 @@ python3 main.py \
     ++train.loss=kl \
     ++train.use_ddp=false \
     ++train.log_interval=5 \
-    ++train.eval_interval=200 \
-    ++train.save_interval=20\
-    ++train.do_save=false \
+    ++train.eval_interval=20 \
+    ++train.do_save=true \
     ++train.steps=1000 \
     ++train.train_batch_size=16 \
     ++train.validation_batch_size=16 \
-    ++train.do_save=true \
     ++train.lr=1e-6 \
     ++train.scheduler=cosine \
     ++wandb.enabled=false \

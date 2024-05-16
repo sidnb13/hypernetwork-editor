@@ -294,7 +294,6 @@ def evaluate(
 
     if rank == 0:
         if dist.is_initialized():
-            # move to cpu to prevent memory leaks
             editor_out.logits = torch.cat(gathered_logits, dim=0)
             editor_out.target_hidden_states = torch.cat(
                 gathered_target_hidden_states, dim=0

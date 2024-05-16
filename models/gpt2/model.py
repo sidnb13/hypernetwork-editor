@@ -1,4 +1,4 @@
-from typing import Any, Mapping, Optional, Tuple, Union, List
+from typing import Any, List, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -20,17 +20,18 @@ from ..utils import (
     assign_layer_indices,
     compute_position_ids,
 )
-from .layers import EditorUnembedCrossAttention
+from .layers import EditorUnembedCrossAttention, OldEditorAttention
 
 
 class GPT2EditorConfig(GPT2Config, EditorConfig):
     init_attn_proj_bias: bool = False
     compute_position_ids: bool = True
     use_ghost_token: bool = False
-    cross_attn_layers: List[int] = [] #mike: are these 3 lines necessary?
+    cross_attn_layers: List[int] = []  # mike: are these 3 lines necessary?
     restrict_edit_to_layers: List[int] = []
     restrict_edit_to_positions: List[int] = []
-    
+
+
 class GPT2EditorHypernetwork(GPT2LMHeadModel):
     _tied_weights_keys = []
 
@@ -123,6 +124,7 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
 
         reverse_attention_output = self.lm_head(
             hidden_states,
+            attention_mask=attention_mask,
             encoder_hidden_states=encoder_hidden_states,
             output_attentions=output_attentions,
         )
@@ -254,7 +256,7 @@ class GPT2Editor(nn.Module):
             else:
                 target_hidden_states = torch.stack(
                     self._run_target_model_for_encoded_hidden_states(
-                        target_input_ids, target_attention_mask
+                        target_input_ids, target_attention_mask, target_position_ids
                     ),  # seems to break while we are passing thru batch_size=1; the last (12th =) has different dimensions
                     dim=2,
                 )
@@ -271,8 +273,6 @@ class GPT2Editor(nn.Module):
                 device=target_hidden_states.device,
                 dtype=target_hidden_states.dtype,
             )
-            
-            print(target_attention_mask)
 
             for i in range(target_hidden_states.shape[0]):
                 target_hidden_states_new[i] = target_hidden_states[
@@ -338,26 +338,24 @@ class GPT2Editor(nn.Module):
             )
 
         # If we are stopping editing at stop_editing_index,
-        # this pads batch_edit_vectors with 0's to the right of the edited positions
+        # this pads batch_edit_vectors with 0's to the left of the edited positions
         if stop_editing_idx is not None:
-            batch_edit_vectors = torch.cat(
-                (
-                    batch_edit_vectors,
-                    torch.zeros(
-                        batch_edit_vectors.shape[0],
-                        target_input_ids.shape[1] - stop_editing_idx,
-                        self.config.n_layer + 1,
-                        self.config.n_embd,
-                        device=batch_edit_vectors.device,
-                        dtype=batch_edit_vectors.dtype,
-                    ),
-                ),
-                dim=1,
+            padded_batch_edits = torch.zeros(
+                batch_edit_vectors.shape[0],
+                target_input_ids.shape[1],
+                self.config.n_layer + 1,
+                self.config.n_embd,
+                device=batch_edit_vectors.device,
+                dtype=batch_edit_vectors.dtype,
             )
-        
-        #testing the masking:
-        #print("batch_edit_vectors")
-        #print(batch_edit_vectors)
+            mask_sum = target_attention_mask.cumsum(-1)
+            stop_edit_mask = torch.logical_and(
+                mask_sum > 0, mask_sum <= stop_editing_idx
+            )
+            padded_batch_edits[stop_edit_mask] = batch_edit_vectors.view(
+                -1, *batch_edit_vectors.shape[2:]
+            )
+            batch_edit_vectors = padded_batch_edits
 
         # Run target model with edit vectors.
         # This adds the edit vectors to the given hidden state at the specified batch index, position, and layer
