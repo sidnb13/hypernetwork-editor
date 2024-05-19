@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -6,7 +7,6 @@ import re
 from typing import Any, Callable, List, Literal
 
 import datasets
-import torch
 import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
@@ -35,6 +35,14 @@ class DatasetCache:
                 k: OmegaConf.to_object(getattr(args[0], k)) for k in self.hash_keys
             }
             signature = hashlib.md5(json.dumps(hash_config).encode("utf-8")).hexdigest()
+
+            # Get the source code of the function as a string
+            function_source = inspect.getsource(func)
+            # Encode the source code using UTF-8
+            encoded_source = function_source.encode("utf-8")
+            # Compute the MD5 hash of the encoded source code
+            signature += hashlib.md5(encoded_source).hexdigest()
+
             is_rank0 = not dist.is_initialized() or dist.get_rank() == 0
             rank = 0 if is_rank0 else dist.get_rank()
 
@@ -42,17 +50,28 @@ class DatasetCache:
                 return dist.barrier() if dist.is_initialized() else None
 
             cache_folder = os.path.join(self.cache_dir, f"{func.__name__}_{signature}")
-            if os.path.exists(cache_folder):
-                barrier()
-                logger.debug(
-                    f"Loading cached huggingface dataset from {cache_folder} ({rank=})"
-                )
-                return datasets.load_from_disk(cache_folder)
-            elif is_rank0:
-                logger.debug(f"Processing huggingface dataset ({rank=})")
-                result = func(*args, **kwargs)
-                result.save_to_disk(cache_folder)
-                return result
+            use_cache = os.environ.get("USE_CACHE", "true").lower() == "true"
+            if use_cache:
+                if os.path.exists(cache_folder):
+                    barrier()
+                    logger.debug(
+                        f"Loading cached huggingface dataset from {cache_folder} ({rank=})"
+                    )
+                    return datasets.load_from_disk(cache_folder)
+                elif is_rank0:
+                    logger.debug(f"Processing huggingface dataset ({rank=})")
+                    result = func(*args, **kwargs)
+                    result.save_to_disk(cache_folder)
+                    return result
+            else:
+                if is_rank0:
+                    logger.debug(f"Processing huggingface dataset ({rank=})")
+                    result = func(*args, **kwargs)
+                    result.save_to_disk(cache_folder)
+                    return result
+                else:
+                    barrier()
+                    return datasets.load_from_disk(cache_folder)
 
         return wrapper
 

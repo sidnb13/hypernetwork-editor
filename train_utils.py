@@ -223,6 +223,7 @@ def evaluate(
 ):
     batch_metrics = {
         "counters/val_examples": val_examples_counter,
+        "counters/step": step,
     }
     val_batch = next(val_itr)
     if config.train.loss == "kl":

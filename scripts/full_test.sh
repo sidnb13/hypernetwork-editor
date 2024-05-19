@@ -5,7 +5,7 @@ python3 main.py \
     task=wikipedia \
     exp_name=wikipedia-full \
     ++model.use_layerwise_embeddings=false \
-    ++model.num_editing_heads=768 \
+    ++model.num_editing_heads=384 \
     ++model.compute_position_ids=false \
     ++train.loss=kl \
     ++train.use_ddp=true \
@@ -18,3 +18,4 @@ python3 main.py \
     ++train.lr=1e-4 \
     ++train.scheduler=cosine \
     ++wandb.enabled=true \
+    ++wandb.notes="old reverse attn implementation"

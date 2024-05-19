@@ -44,10 +44,10 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         else:
             _attention_cls = GPT2Attention
 
-        self.lm_head = EditorUnembedCrossAttention(
-            config=config, layer_idx=config.chop_editor_at_layer
-        )
-        # self.lm_head = OldEditorAttention(config)
+        # self.lm_head = EditorUnembedCrossAttention(
+        #     config=config, layer_idx=config.chop_editor_at_layer
+        # )
+        self.lm_head = OldEditorAttention(config)
 
         # prune layers and add cross attn heads
         self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
@@ -63,6 +63,21 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
             layer.ln_cross_attn = nn.LayerNorm(
                 config.hidden_size, eps=config.layer_norm_epsilon
             )
+            original_query_weights = layer.attn.c_attn.weight[:, : config.hidden_size]
+            original_keys_values = layer.attn.c_attn.weight[:, config.hidden_size :]
+            original_query_bias = layer.attn.c_attn.bias[: config.hidden_size]
+            original_keys_values_bias = layer.attn.c_attn.bias[config.hidden_size :]
+
+            with torch.no_grad():
+                # Initialize the new layer with these parameters
+                layer.crossattention.q_attn.weight = nn.Parameter(
+                    original_query_weights
+                )
+                layer.crossattention.q_attn.bias = nn.Parameter(original_query_bias)
+                layer.crossattention.c_attn.weight = nn.Parameter(original_keys_values)
+                layer.crossattention.c_attn.bias = nn.Parameter(
+                    original_keys_values_bias
+                )
 
         # Model parallel
         self.model_parallel = False
@@ -206,16 +221,6 @@ class GPT2Editor(nn.Module):
         stop_editing_idx: int = None,
         batch_edit_vectors: torch.Tensor = None,
     ) -> EditorModelOutput:
-        # print("devices for all args")
-        # print(editor_input_ids.device)
-        # print(editor_attention_mask.device)
-        # print(target_input_ids.device)
-        # print(target_attention_mask.device)
-        # if target_hidden_states is not None:
-        #     print(target_hidden_states.device)
-        # if batch_edit_vectors is not None:
-        #     print(batch_edit_vectors.device)
-
         # Run target model for encoded hidden states
         if target_hidden_states is None:
             # Add a ghost token to the input_ids and turn off its attention mask
@@ -262,23 +267,20 @@ class GPT2Editor(nn.Module):
                 )
         # dimensions of target_hidden_states:
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
+        mask_sum = target_attention_mask.cumsum(-1)
+        stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
 
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
-            unmasked_sizes = target_attention_mask.sum(-1).tolist()
-            target_hidden_states_new = torch.zeros(
-                target_hidden_states.shape[0],
-                stop_editing_idx,
-                *target_hidden_states.shape[2:],
-                device=target_hidden_states.device,
-                dtype=target_hidden_states.dtype,
+            target_hidden_states = (
+                target_hidden_states[stop_edit_mask]
+                .view(
+                    target_hidden_states.shape[0],
+                    stop_editing_idx,
+                    *target_hidden_states.shape[2:],
+                )
+                .clone()
             )
-
-            for i in range(target_hidden_states.shape[0]):
-                target_hidden_states_new[i] = target_hidden_states[
-                    i, -unmasked_sizes[i] : -unmasked_sizes[i] + stop_editing_idx, :, :
-                ]
-            target_hidden_states = target_hidden_states_new
 
         # Normalize along the last dimension
         normalization_factors = target_hidden_states.norm(dim=-1, keepdim=True)
@@ -347,10 +349,6 @@ class GPT2Editor(nn.Module):
                 self.config.n_embd,
                 device=batch_edit_vectors.device,
                 dtype=batch_edit_vectors.dtype,
-            )
-            mask_sum = target_attention_mask.cumsum(-1)
-            stop_edit_mask = torch.logical_and(
-                mask_sum > 0, mask_sum <= stop_editing_idx
             )
             padded_batch_edits[stop_edit_mask] = batch_edit_vectors.view(
                 -1, *batch_edit_vectors.shape[2:]

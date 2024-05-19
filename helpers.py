@@ -76,19 +76,21 @@ def visualize_attn_heatmap(
         # Add a title
         plt.title("Edit / Target Norm Heatmap")
 
-        if stopping_index is None:
-            editing_target_tokens = batch["target_input_ids"][batch_index]
-        else:
-            editing_target_tokens = batch["target_input_ids"][batch_index][
-                target_attn_mask > 0
-            ][:stopping_index]
+        editing_target_tokens = batch["target_input_ids"][batch_index][
+            target_attn_mask > 0
+        ]
+        if stopping_index is not None:
+            editing_target_tokens = editing_target_tokens[:stopping_index]
 
         editing_target = tokenizer.batch_decode(
             editing_target_tokens,
             skip_special_tokens=True,
         )
         editor_input = tokenizer.batch_decode(
-            batch["editor_input_ids"][batch_index], skip_special_tokens=True
+            batch["editor_input_ids"][batch_index][
+                batch["editor_attention_mask"][batch_index] > 0
+            ],
+            skip_special_tokens=True,
         )
         select_logits = (
             result.logits[batch_index][target_attn_mask > 0][:stopping_index].cpu()
@@ -181,6 +183,7 @@ def concat_and_pad_ids(batch: dict, pad_token: int):
     # Find the lengths in A and B
     lengths_A = torch.sum(batch["editor_attention_mask"] > 0, dim=1)
     lengths_B = torch.sum(batch["target_attention_mask"] > 0, dim=1)
+
     # initialize empty tensor
     max_len = max(lengths_A + lengths_B)
     result = torch.full(
