@@ -18,4 +18,4 @@ python3 main.py \
     ++train.lr=1e-4 \
     ++train.scheduler=cosine \
     ++wandb.enabled=true \
-    ++wandb.notes="old reverse attn implementation"
+    ++wandb.notes="revert to new attn implementation"

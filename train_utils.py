@@ -47,7 +47,7 @@ def train(
     config: DictConfig,
     editor: nn.Module,
     train_dataloader: DataLoader,
-    validation_dataloader: DataLoader,
+    validation_dataloader: DataLoader = None,
 ):
     # distributed setup
     if config.train.use_ddp:
@@ -111,12 +111,15 @@ def train(
 
     # training
     train_itr = itertools.cycle(train_dataloader)
-    val_itr = itertools.cycle(validation_dataloader)
+    if validation_dataloader is not None:
+        val_itr = itertools.cycle(validation_dataloader)
+    else:
+        val_itr = None
 
     # skip start_steps
     for i in range(start_step):
         next(train_itr)
-        if i > 0 and i % config.train.eval_interval == 0:
+        if val_itr and i > 0 and i % config.train.eval_interval == 0:
             next(val_itr)
 
     if start_step > 0:
@@ -187,16 +190,27 @@ def train(
                     wandb.log(batch_metrics)
 
         if step > 0 and step % config.train.eval_interval == 0:
-            evaluate(
-                step,
-                val_examples_counter,
-                editor,
-                tokenizer,
-                val_itr,
-                rank,
-                world_size,
-                config,
-            )
+            if val_itr:
+                evaluate(
+                    step,
+                    val_examples_counter,
+                    editor,
+                    tokenizer,
+                    val_itr,
+                    rank,
+                    world_size,
+                    config,
+                )
+            else:
+                visualize(
+                    editor,
+                    tokenizer,
+                    train_batch,
+                    step,
+                    rank,
+                    world_size,
+                    config,
+                )
 
         if config.train.do_save and step > 0 and step % config.train.save_interval == 0:
             if dist.is_initialized():
@@ -254,9 +268,30 @@ def evaluate(
     if wandb.run and rank == 0:
         wandb.log(batch_metrics)
 
+    visualize(
+        editor,
+        tokenizer,
+        val_batch,
+        step,
+        rank,
+        world_size,
+        config,
+    )
+
+
+@torch.no_grad()
+def visualize(
+    editor: GPT2Editor,
+    tokenizer,
+    batch: Dict[str, torch.Tensor],
+    step,
+    rank,
+    world_size,
+    config,
+):
     # save attention visualizations
     editor_out = editor(
-        **slice_and_move_batch_for_device(val_batch, rank, world_size),
+        **slice_and_move_batch_for_device(batch, rank, world_size),
         stop_editing_idx=config.train.stop_editing_idx,
         output_target_hidden_states=True,
         output_edit_vectors=True,
@@ -303,7 +338,7 @@ def evaluate(
             editor_out.editor_attention = torch.cat(gathered_editor_attention, dim=0)
         visualize_attn_heatmap(
             result=editor_out,
-            batch=val_batch,
+            batch=batch,
             save_path=os.path.join(
                 config.ckpt_dir, config.exp_name, "step-{}".format(step)
             )

@@ -12,6 +12,6 @@ python3 main.py \
     ++train.steps=1000 \
     ++train.train_batch_size=16 \
     ++train.validation_batch_size=16 \
-    ++train.lr=1e-6 \
-    ++train.scheduler=cosine \
-    ++wandb.enabled=false \
+    ++train.lr=3e-4 \
+    ++train.scheduler=constant \
+    ++wandb.enabled=true \

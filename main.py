@@ -45,9 +45,12 @@ def main(config: DictConfig):
         train_dataloader = get_dataloader(
             get_task(config, config.task.name, "train"), config, "train"
         )
-        validation_dataloader = get_dataloader(
-            get_task(config, config.task.name, "val"), config, "val"
-        )
+        if config.train.do_eval:
+            validation_dataloader = get_dataloader(
+                get_task(config, config.task.name, "val"), config, "val"
+            )
+        else:
+            validation_dataloader = None
 
         # print trainable params
         trainable_params, all_params = get_nb_trainable_parameters(editor_model)

@@ -270,6 +270,13 @@ class GPT2Editor(nn.Module):
         mask_sum = target_attention_mask.cumsum(-1)
         stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
 
+        # for tgt,stp in zip(target_attention_mask, stop_edit_mask):
+        #     print(f"{tgt=}")
+        #     print(f"{stp=}")
+        #     print("+" * 80)
+
+        # exit(0)
+
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
             target_hidden_states = (

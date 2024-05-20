@@ -42,6 +42,7 @@ train:
   eval_interval: 100
   save_interval: 500
   do_save: true
+  do_eval: true
 
 data:
   test_split: 0.1

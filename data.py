@@ -166,6 +166,12 @@ def load_wikipedia(config: DictConfig):
     new_dataset = new_dataset.filter(
         lambda row: sum(row["target_attention_mask"]) > limit, num_proc=os.cpu_count()
     )
+
+    # DEBUG ONLY
+    # new_dataset = new_dataset.filter(
+    #     lambda x: sum(x["target_attention_mask"]) == 50, num_proc=os.cpu_count()
+    # )
+
     new_dataset.set_format(
         "torch",
         columns=[
@@ -184,10 +190,15 @@ def shuffle_and_select(
     test_split: float,
     val_split: float,
     seed: int,
+    do_eval: bool = False,
 ):
     """Shuffle and select a split of a flat dataset."""
     # shuffle and take split according to seed
     dataset = dataset.shuffle(seed=seed)
+
+    if split == "train" and not do_eval:
+        return dataset
+
     # get number of examples parsed from split
     match = re.search(r"(\d+)(\%)*", split)
 
