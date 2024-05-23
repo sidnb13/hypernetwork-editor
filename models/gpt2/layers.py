@@ -2,19 +2,12 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast
 from transformers.models.gpt2.modeling_gpt2 import (
     GPT2Attention,
-    _get_unpad_data,
-)
-from transformers.utils import (
-    is_flash_attn_2_available,
 )
 
 from .config import GPT2EditorConfig
-
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input
 
 
 class Conv1D(nn.Module):
@@ -52,6 +45,7 @@ class Conv1D(nn.Module):
 
 class EditorUnembedCrossAttention(GPT2Attention):
     is_cross_attention = True
+    _flash_attn_enabled = False
 
     def __init__(self, config: GPT2EditorConfig, layer_idx=None, **kwargs):
         nn.Module.__init__(self)
@@ -137,7 +131,6 @@ class EditorUnembedCrossAttention(GPT2Attention):
         self.is_causal = True
 
         self.pruned_heads = set()
-        self._flash_attn_enabled = config._attn_implementation == "flash_attention_2"
 
     def _split_heads(self, tensor: torch.Tensor):
         """
@@ -145,6 +138,127 @@ class EditorUnembedCrossAttention(GPT2Attention):
         """
         new_shape = tensor.size()[:-1] + (self.heads_per_multiply, self.head_dim)
         return tensor.view(new_shape)
+
+    def _attn(self, query, key, value, attention_mask=None, head_mask=None):
+        # NOTE: Squeeze the key dimension since we want to attend over query tokens
+        attn_weights = torch.matmul(query, key.transpose(-1, -2)).squeeze(-1)
+
+        if self.scale_attn_weights:
+            attn_weights = attn_weights / torch.full(
+                [],
+                value.size(-1) ** 0.5,
+                dtype=attn_weights.dtype,
+                device=attn_weights.device,
+            )
+
+        # Layer-wise attention scaling
+        if self.scale_attn_by_inverse_layer_idx:
+            attn_weights = attn_weights / float(self.layer_idx + 1)
+
+        if not self.is_cross_attention:
+            # if only "normal" attention layer implements causal mask
+            query_length, key_length = query.size(-2), key.size(-2)
+            causal_mask = self.bias[
+                :, :, key_length - query_length : key_length, :key_length
+            ]
+            mask_value = torch.finfo(attn_weights.dtype).min
+            # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
+            # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
+            mask_value = torch.full(
+                [], mask_value, dtype=attn_weights.dtype, device=attn_weights.device
+            )
+            attn_weights = torch.where(
+                causal_mask, attn_weights.to(attn_weights.dtype), mask_value
+            )
+
+        if attention_mask is not None:
+            # Apply the attention mask
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
+        attn_weights = attn_weights.type(value.dtype)
+        attn_weights = self.attn_dropout(attn_weights)
+
+        # Mask heads if we want to
+        if head_mask is not None:
+            attn_weights = attn_weights * head_mask
+
+        # unsqueeze to retain key length of 1
+        attn_output = torch.matmul(attn_weights.unsqueeze(-1), value)
+
+        return attn_output, attn_weights
+
+    def _upcast_and_reordered_attn(
+        self, query, key, value, attention_mask=None, head_mask=None
+    ):
+        # Use `torch.baddbmm` (a bit more efficient w/ alpha param for scaling -- from Megatron-LM)
+        bsz, num_heads, q_seq_len, dk = query.size()
+
+        # Preallocate attn_weights for `baddbmm`
+        attn_weights = torch.empty(
+            bsz * num_heads,
+            q_seq_len,
+            1,
+            dtype=torch.float32,
+            device=query.device,
+        )
+
+        # Compute Scale Factor
+        scale_factor = 1.0
+        if self.scale_attn_weights:
+            scale_factor /= float(value.size(-1)) ** 0.5
+
+        if self.scale_attn_by_inverse_layer_idx:
+            scale_factor /= float(self.layer_idx + 1)
+
+        # Upcast (turn off autocast) and reorder (Scale K by 1 / root(dk))
+        with autocast(enabled=False):
+            q, k = (
+                query.reshape(-1, q_seq_len, dk),
+                key.transpose(-1, -2).reshape(-1, dk, 1),
+            )
+            attn_weights = torch.baddbmm(
+                attn_weights, q.float(), k.float(), beta=0, alpha=scale_factor
+            ).squeezed(-1)
+            attn_weights = attn_weights.reshape(bsz, num_heads, q_seq_len)
+
+        if not self.is_cross_attention:
+            # if only "normal" attention layer implements causal mask
+            query_length, key_length = query.size(-2), key.size(-2)
+            causal_mask = self.bias[
+                :, :, key_length - query_length : key_length, :key_length
+            ]
+            mask_value = torch.finfo(attn_weights.dtype).min
+            # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
+            # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
+            mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(
+                attn_weights.device
+            )
+            attn_weights = torch.where(causal_mask, attn_weights, mask_value)
+
+        if attention_mask is not None:
+            # Apply the attention mask
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op if otherwise
+        if attn_weights.dtype != torch.float32:
+            raise RuntimeError(
+                "Error with upcasting, attn_weights does not have dtype torch.float32"
+            )
+        attn_weights = attn_weights.type(value.dtype)
+        attn_weights = self.attn_dropout(attn_weights)
+
+        # Mask heads if we want to
+        if head_mask is not None:
+            attn_weights = attn_weights * head_mask
+
+        attn_output = torch.matmul(attn_weights, value)
+
+        return attn_output, attn_weights
 
     def forward(
         self,
@@ -173,7 +287,6 @@ class EditorUnembedCrossAttention(GPT2Attention):
             key, value = self.c_attn[i](hidden_states[:, -1, :]).split(
                 self.split_size, dim=-1
             )
-
             # print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
             # To construct the mask, we can write the mask in matrix form and then stack along d = 2
 
@@ -219,23 +332,14 @@ class EditorUnembedCrossAttention(GPT2Attention):
             else:
                 present = None
 
-            if self._flash_attn_enabled:
-                attn_dropout = self.attn_dropout.p if self.training else 0.0
-                attn_output = self._flash_attention_forward(
-                    query, key, value, attention_mask, query_len, dropout=attn_dropout
-                )
-                attn_weights = attn_output.reshape(
-                    bsz, query_len, self.num_heads * self.head_dim
+            if self.reorder_and_upcast_attn:
+                attn_output, attn_weights = self._upcast_and_reordered_attn(
+                    query, key, value, attention_mask, head_mask
                 )
             else:
-                if self.reorder_and_upcast_attn:
-                    attn_output, attn_weights = self._upcast_and_reordered_attn(
-                        query, key, value, attention_mask, head_mask
-                    )
-                else:
-                    attn_output, attn_weights = self._attn(
-                        query, key, value, attention_mask, head_mask
-                    )
+                attn_output, attn_weights = self._attn(
+                    query, key, value, attention_mask, head_mask
+                )
 
             # unmerge the head and batch dimension
             attn_output = attn_output.reshape(bsz, num_heads, -1, head_dim)
@@ -250,154 +354,28 @@ class EditorUnembedCrossAttention(GPT2Attention):
                 if output_attentions:
                     outputs += (attn_weights,)
             else:
-                # print(outputs[0][0])
-                outputs[0][0] += attn_output[0]
+                attn_output_old, present = outputs
+                attn_output += attn_output_old
+
+                outputs = (attn_output, present)
+
                 if use_cache is True:
-                    print(
+                    raise ValueError(
                         "Error, key-value caching for this is not implemented. Should we even be doing this? -Mike"
                     )
-                    # outputs[1] = ( torch.stack( (outputs[1][0], present[0]) ), torch.stack( (outputs[1][1] , present[1]))) #genuinely unsure what the stacking axes should be!
                 if output_attentions:
                     # Check stacking dimensions!
                     # Find which dimension of attn_weights is equal to the number of heads per multiply
                     # Then stack along that dimension
                     # Don't use number of heads equal to 786 until this is cleared up!
                     stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
-                    print("stacking dimension is", stacking_dim)
-                    attn_output, present = outputs[0], outputs[1]
+                    attn_output, present, attn_weights_old = outputs
                     attn_weights = torch.stack(
-                        (outputs[2], attn_weights), dim=stacking_dim
+                        (attn_weights_old, attn_weights), dim=stacking_dim
                     )
                     outputs = (attn_output, present, attn_weights)
 
         return outputs  # a, present, (attentions)
-
-    # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2._flash_attention_forward
-    def _flash_attention_forward(
-        self,
-        query_states,
-        key_states,
-        value_states,
-        attention_mask,
-        query_length,
-        dropout=0.0,
-        softmax_scale=None,
-    ):
-        """
-        Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
-        first unpad the input, then computes the attention scores and pad the final attention scores.
-
-        Args:
-            query_states (`torch.Tensor`):
-                Input query states to be passed to Flash Attention API
-            key_states (`torch.Tensor`):
-                Input key states to be passed to Flash Attention API
-            value_states (`torch.Tensor`):
-                Input value states to be passed to Flash Attention API
-            attention_mask (`torch.Tensor`):
-                The padding mask - corresponds to a tensor of size `(batch_size, seq_len)` where 0 stands for the
-                position of padding tokens and 1 for the position of non-padding tokens.
-            dropout (`float`):
-                Attention dropout
-            softmax_scale (`float`, *optional*):
-                The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
-        """
-        if not self._flash_attn_uses_top_left_mask:
-            causal = self.is_causal
-        else:
-            # TODO: Remove the `query_length != 1` check once Flash Attention for RoCm is bumped to 2.1. For details, please see the comment in LlamaFlashAttention2 __init__.
-            causal = self.is_causal and query_length != 1
-
-        # Contains at least one padding token in the sequence
-        if attention_mask is not None:
-            batch_size = query_states.shape[0]
-            (
-                query_states,
-                key_states,
-                value_states,
-                indices_q,
-                cu_seq_lens,
-                max_seq_lens,
-            ) = self._upad_input(
-                query_states, key_states, value_states, attention_mask, query_length
-            )
-
-            cu_seqlens_q, cu_seqlens_k = cu_seq_lens
-            max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
-
-            attn_output_unpad = flash_attn_varlen_func(
-                query_states,
-                key_states,
-                value_states,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k=cu_seqlens_k,
-                max_seqlen_q=max_seqlen_in_batch_q,
-                max_seqlen_k=max_seqlen_in_batch_k,
-                dropout_p=dropout,
-                softmax_scale=softmax_scale,
-                causal=causal,
-            )
-
-            attn_output = pad_input(
-                attn_output_unpad, indices_q, batch_size, query_length
-            )
-        else:
-            attn_output = flash_attn_func(
-                query_states,
-                key_states,
-                value_states,
-                dropout,
-                softmax_scale=softmax_scale,
-                causal=causal,
-            )
-
-        return attn_output
-
-    # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2._upad_input
-    def _upad_input(
-        self, query_layer, key_layer, value_layer, attention_mask, query_length
-    ):
-        indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(attention_mask)
-        batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
-
-        key_layer = index_first_axis(
-            key_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim),
-            indices_k,
-        )
-        value_layer = index_first_axis(
-            value_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim),
-            indices_k,
-        )
-        if query_length == kv_seq_len:
-            query_layer = index_first_axis(
-                query_layer.reshape(batch_size * kv_seq_len, self.num_heads, head_dim),
-                indices_k,
-            )
-            cu_seqlens_q = cu_seqlens_k
-            max_seqlen_in_batch_q = max_seqlen_in_batch_k
-            indices_q = indices_k
-        elif query_length == 1:
-            max_seqlen_in_batch_q = 1
-            cu_seqlens_q = torch.arange(
-                batch_size + 1, dtype=torch.int32, device=query_layer.device
-            )  # There is a memcpy here, that is very bad.
-            indices_q = cu_seqlens_q[:-1]
-            query_layer = query_layer.squeeze(1)
-        else:
-            # The -q_len: slice assumes left padding.
-            attention_mask = attention_mask[:, -query_length:]
-            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(
-                query_layer, attention_mask
-            )
-
-        return (
-            query_layer,
-            key_layer,
-            value_layer,
-            indices_q,
-            (cu_seqlens_q, cu_seqlens_k),
-            (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
-        )
 
 
 class OldEditorAttention(nn.Module):

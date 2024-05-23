@@ -44,10 +44,10 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         else:
             _attention_cls = GPT2Attention
 
-        # self.lm_head = EditorUnembedCrossAttention(
-        #     config=config, layer_idx=config.chop_editor_at_layer
-        # )
-        self.lm_head = OldEditorAttention(config)
+        self.lm_head = EditorUnembedCrossAttention(
+            config=config, layer_idx=config.chop_editor_at_layer
+        )
+        # self.lm_head = OldEditorAttention(config)
 
         # prune layers and add cross attn heads
         self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from transformers import PretrainedConfig
@@ -14,9 +14,12 @@ class EditorConfig(PretrainedConfig):
     edit_channel_multiply_factor: int = 2
     chop_editor_at_layer: int = -1
     num_editing_heads: int = 32
-    use_layerwise_embeddings: bool = True
+    use_layerwise_embeddings: bool = False
     edit_dampening_factor: float = 0.001
     kill_token_zero: bool = False
+    cross_attn_layers: Optional[List[int]] = []
+    restrict_edit_to_layers: Optional[List[int]] = []
+    restrict_edit_to_positions: Optional[List[int]] = []
 
 
 @dataclass
