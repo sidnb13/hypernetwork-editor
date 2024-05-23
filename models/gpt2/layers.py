@@ -354,11 +354,6 @@ class EditorUnembedCrossAttention(GPT2Attention):
                 if output_attentions:
                     outputs += (attn_weights,)
             else:
-                attn_output_old, present = outputs
-                attn_output += attn_output_old
-
-                outputs = (attn_output, present)
-
                 if use_cache is True:
                     raise ValueError(
                         "Error, key-value caching for this is not implemented. Should we even be doing this? -Mike"
@@ -369,11 +364,17 @@ class EditorUnembedCrossAttention(GPT2Attention):
                     # Then stack along that dimension
                     # Don't use number of heads equal to 786 until this is cleared up!
                     stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
-                    attn_output, present, attn_weights_old = outputs
+                    attn_output_old, _, attn_weights_old = outputs
+                    attn_output += attn_output_old
+
                     attn_weights = torch.stack(
                         (attn_weights_old, attn_weights), dim=stacking_dim
                     )
                     outputs = (attn_output, present, attn_weights)
+                else:
+                    attn_output_old, _ = outputs
+                    attn_output += attn_output_old
+                    outputs = (attn_output, present)
 
         return outputs  # a, present, (attentions)
 

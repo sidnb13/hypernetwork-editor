@@ -4,6 +4,7 @@ python3 main.py \
     mode=train \
     task=wikipedia \
     exp_name=test \
+    ++model.edit_channel_multiply_factor=1 \
     ++train.loss=kl \
     ++train.use_ddp=false \
     ++train.log_interval=5 \
@@ -14,4 +15,4 @@ python3 main.py \
     ++train.validation_batch_size=16 \
     ++train.lr=3e-4 \
     ++train.scheduler=constant \
-    ++wandb.enabled=true \
+    ++wandb.enabled=false \

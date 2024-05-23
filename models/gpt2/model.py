@@ -20,7 +20,7 @@ from ..utils import (
     assign_layer_indices,
     compute_position_ids,
 )
-from .layers import EditorUnembedCrossAttention, OldEditorAttention
+from .layers import EditorUnembedCrossAttention
 
 
 class GPT2EditorConfig(GPT2Config, EditorConfig):
@@ -47,7 +47,6 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         self.lm_head = EditorUnembedCrossAttention(
             config=config, layer_idx=config.chop_editor_at_layer
         )
-        # self.lm_head = OldEditorAttention(config)
 
         # prune layers and add cross attn heads
         self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]

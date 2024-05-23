@@ -15,7 +15,6 @@ python3 main.py \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
-    ++train.lr=1e-4 \
-    ++train.scheduler=cosine \
-    ++wandb.enabled=true \
-    ++wandb.notes="revert to new attn implementation"
+    ++train.lr=3e-4 \
+    ++train.scheduler=constant \
+    ++wandb.enabled=false \
