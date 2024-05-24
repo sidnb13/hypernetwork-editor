@@ -1,6 +1,6 @@
 import itertools
 import os
-from typing import Dict
+from typing import Dict, Literal
 
 import torch
 import torch.distributed as dist
@@ -465,10 +465,10 @@ def compute_kl_loss(
         extracted_logits = torch.full(
             shape, torch.nan, device=edited_target_logps.device
         )
-        # Extract the predictions corresponding to B, assume LEFT padding
+        # Extract the predictions corresponding to B
         for i in range(len(lengths_A)):
-            extracted_logits[i, -lengths_B[i] :, :] = target_logits[
-                i, -lengths_B[i] :, :
+            extracted_logits[i, : lengths_B[i], :] = target_logits[
+                i, lengths_A[i] : lengths_A[i] + lengths_B[i], :
             ]
         target_logps = torch.nn.functional.log_softmax(extracted_logits, dim=-1)
 
