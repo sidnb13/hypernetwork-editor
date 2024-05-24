@@ -17,4 +17,4 @@ python3 main.py \
     ++train.do_save=true \
     ++train.lr=3e-4 \
     ++train.scheduler=constant \
-    ++wandb.enabled=false \
+    ++wandb.enabled=true \

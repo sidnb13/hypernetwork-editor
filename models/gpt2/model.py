@@ -18,7 +18,6 @@ from ..utils import (
     EditorModelOutput,
     add_fwd_hooks,
     assign_layer_indices,
-    compute_position_ids,
 )
 from .layers import EditorUnembedCrossAttention
 
@@ -110,7 +109,7 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         # set device for input_ids to cuda ?
         # input_ids = input_ids.to(self.lm_head.weight.device)
         if position_ids is None and self.config.compute_position_ids:
-            position_ids = compute_position_ids(attention_mask)
+            position_ids = attention_mask.cumsum(-1)
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -202,8 +201,7 @@ class GPT2Editor(nn.Module):
                 output_hidden_states=True,
             )
 
-        hidden_states = outputs.hidden_states
-        return hidden_states
+        return outputs.hidden_states
 
     def forward(
         self,
@@ -268,13 +266,6 @@ class GPT2Editor(nn.Module):
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
         mask_sum = target_attention_mask.cumsum(-1)
         stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
-
-        # for tgt,stp in zip(target_attention_mask, stop_edit_mask):
-        #     print(f"{tgt=}")
-        #     print(f"{stp=}")
-        #     print("+" * 80)
-
-        # exit(0)
 
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:

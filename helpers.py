@@ -156,11 +156,11 @@ def get_nb_trainable_parameters(model: torch.nn.Module) -> tuple[int, int]:
     return trainable_params, all_param
 
 
-def get_tokenizer(name_or_path):
+def get_tokenizer(name_or_path, padding_side="right"):
     tok = AutoTokenizer.from_pretrained(name_or_path)
     tok.pad_token_id = tok.eos_token_id
     # This is very important because we take last hidden state in editor
-    tok.padding_side = "left"
+    tok.padding_side = padding_side
     return tok
 
 

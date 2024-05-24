@@ -88,6 +88,8 @@ def load_wikipedia(config: DictConfig):
     dataset = datasets.load_dataset("abokbot/wikipedia-first-paragraph", split="train")
     tokenizer = get_tokenizer(config.model.name_or_path)
 
+    assert tokenizer.padding_side == "right", "padding_side must be 'right'"
+
     def extract_sentences(texts: dict):
         first_sentences = []
         second_sentences = []

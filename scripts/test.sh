@@ -6,7 +6,7 @@ python3 main.py \
     exp_name=test \
     ++model.edit_channel_multiply_factor=1 \
     ++train.loss=kl \
-    ++train.use_ddp=false \
+    ++train.use_ddp=true \
     ++train.log_interval=5 \
     ++train.eval_interval=20 \
     ++train.do_save=true \
