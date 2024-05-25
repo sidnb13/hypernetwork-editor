@@ -169,11 +169,6 @@ def load_wikipedia(config: DictConfig):
         lambda row: sum(row["target_attention_mask"]) > limit, num_proc=os.cpu_count()
     )
 
-    # DEBUG ONLY
-    # new_dataset = new_dataset.filter(
-    #     lambda x: sum(x["target_attention_mask"]) == 50, num_proc=os.cpu_count()
-    # )
-
     new_dataset.set_format(
         "torch",
         columns=[

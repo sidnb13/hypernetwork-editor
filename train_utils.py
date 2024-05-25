@@ -5,7 +5,6 @@ from typing import Dict
 import torch
 import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
-from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from transformers import (
@@ -45,7 +44,7 @@ def train(
     rank: int,
     world_size: int,
     config: DictConfig,
-    editor: nn.Module,
+    editor: GPT2Editor,
     train_dataloader: DataLoader,
     validation_dataloader: DataLoader = None,
 ):
@@ -58,7 +57,7 @@ def train(
 
     tokenizer = AutoTokenizer.from_pretrained(config.model.name_or_path)
 
-    opt = torch.optim.Adam(
+    opt = torch.optim.AdamW(
         editor.parameters(),
         lr=config.train.lr,
         weight_decay=config.train.weight_decay,
@@ -133,7 +132,7 @@ def train(
     )
 
     for step in range(start_step, total_steps):
-        editor.train()
+        editor.hypernetwork.train()
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
@@ -234,9 +233,16 @@ def train(
 
 @torch.no_grad()
 def evaluate(
-    step, val_examples_counter, editor, tokenizer, val_itr, rank, world_size, config
+    step,
+    val_examples_counter,
+    editor: GPT2Editor,
+    tokenizer,
+    val_itr,
+    rank,
+    world_size,
+    config,
 ):
-    editor.eval()
+    editor.hypernetwork.eval()
     batch_metrics = {
         "counters/val_examples": val_examples_counter,
         "counters/step": step,
@@ -291,7 +297,6 @@ def visualize(
     world_size,
     config,
 ):
-    editor.eval()
     # save attention visualizations
     local_minibatch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
@@ -367,6 +372,7 @@ def visualize(
             stopping_index=config.train.stop_editing_idx,
             metadata=config,
         )
+
 
 def save_model_checkpoint(
     step,
@@ -497,14 +503,6 @@ def compute_kl_loss(
     ).sum(-1)
 
     kl_div_loss = kl_div_loss.mean()
-
-    # from torchviz import make_dot
-
-    # make_dot(kl_div_loss, params=dict(editor.named_parameters())).render(
-    #     "assets/kl_div_loss_graph.png", format="png"
-    # )
-    # breakpoint()
-
     penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx).mean()
 
     # gather from all ranks

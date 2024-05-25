@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, List, Mapping, Optional, Tuple, Union
 
 import torch
@@ -66,16 +68,12 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
             original_query_bias = layer.attn.c_attn.bias[: config.hidden_size]
             original_keys_values_bias = layer.attn.c_attn.bias[config.hidden_size :]
 
-            with torch.no_grad():
-                # Initialize the new layer with these parameters
-                layer.crossattention.q_attn.weight = nn.Parameter(
-                    original_query_weights
-                )
-                layer.crossattention.q_attn.bias = nn.Parameter(original_query_bias)
-                layer.crossattention.c_attn.weight = nn.Parameter(original_keys_values)
-                layer.crossattention.c_attn.bias = nn.Parameter(
-                    original_keys_values_bias
-                )
+            # with torch.no_grad():
+            # Initialize the new layer with these parameters
+            layer.crossattention.q_attn.weight = nn.Parameter(original_query_weights)
+            layer.crossattention.q_attn.bias = nn.Parameter(original_query_bias)
+            layer.crossattention.c_attn.weight = nn.Parameter(original_keys_values)
+            layer.crossattention.c_attn.bias = nn.Parameter(original_keys_values_bias)
 
         # Model parallel
         self.model_parallel = False
@@ -108,7 +106,11 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         """
         # set device for input_ids to cuda ?
         # input_ids = input_ids.to(self.lm_head.weight.device)
-        if position_ids is None and self.config.compute_position_ids:
+        if (
+            attention_mask is not None
+            and position_ids is None
+            and self.config.compute_position_ids
+        ):
             position_ids = attention_mask.cumsum(-1)
 
         transformer_outputs = self.transformer(
@@ -152,7 +154,9 @@ class GPT2Editor(nn.Module):
 
         self.config = config
         self.hypernetwork = GPT2EditorHypernetwork(config)
-        self.target_model = AutoModelForCausalLM.from_pretrained(config.name_or_path)
+        self.target_model = AutoModelForCausalLM.from_pretrained(
+            config.name_or_path
+        ).eval()
 
         # freeze target model
         for param in self.target_model.parameters():
@@ -170,6 +174,12 @@ class GPT2Editor(nn.Module):
             )
         else:
             self.layerwise_embeddings = None
+
+    def train(self, mode: bool = True) -> GPT2Editor:
+        return self.hypernetwork.train(mode)
+
+    def eval(self) -> GPT2Editor:
+        return self.hypernetwork.eval()
 
     def load_state_dict(
         self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
@@ -264,8 +274,22 @@ class GPT2Editor(nn.Module):
                 )
         # dimensions of target_hidden_states:
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
+
         mask_sum = target_attention_mask.cumsum(-1)
-        stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
+        mask_sum_min = mask_sum.min(dim=-1)[0]
+        edit_window_mask = (
+            torch.arange(
+                0, target_attention_mask.shape[-1], device=target_attention_mask.device
+            )
+            .unsqueeze(0)
+            .repeat(target_attention_mask.shape[0], 1)
+        )
+        edit_window_mask[mask_sum > 0] += (
+            mask_sum_min.unsqueeze(-1).repeat(1, mask_sum.shape[-1]).view(-1)
+        )
+        stop_edit_mask = torch.logical_and(
+            edit_window_mask > 0, edit_window_mask <= stop_editing_idx
+        )
 
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
