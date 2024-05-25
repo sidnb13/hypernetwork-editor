@@ -7,3 +7,5 @@ ipykernel
 hydra-core
 wandb
 jupyter
+graphviz
+torchviz

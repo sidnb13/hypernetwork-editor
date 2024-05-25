@@ -1,6 +1,6 @@
 import itertools
 import os
-from typing import Dict, Literal
+from typing import Dict
 
 import torch
 import torch.distributed as dist
@@ -133,6 +133,7 @@ def train(
     )
 
     for step in range(start_step, total_steps):
+        editor.train()
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
@@ -235,6 +236,7 @@ def train(
 def evaluate(
     step, val_examples_counter, editor, tokenizer, val_itr, rank, world_size, config
 ):
+    editor.eval()
     batch_metrics = {
         "counters/val_examples": val_examples_counter,
         "counters/step": step,
@@ -289,16 +291,25 @@ def visualize(
     world_size,
     config,
 ):
+    editor.eval()
     # save attention visualizations
+    local_minibatch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
-        **slice_and_move_batch_for_device(batch, rank, world_size),
+        **local_minibatch,
         stop_editing_idx=config.train.stop_editing_idx,
         output_target_hidden_states=True,
         output_edit_vectors=True,
         output_editor_attention=True,
     )
-    logger.debug(f"Saving attention heatmaps for step {step}")
+    base = (
+        editor.module.target_model if isinstance(editor, DDP) else editor.target_model
+    )
 
+    orig_out = base(
+        input_ids=local_minibatch["target_input_ids"],
+        attention_mask=local_minibatch["target_attention_mask"],
+    )
+    logger.debug(f"Saving attention heatmaps for step {step}")
     # gather results from ranks, use global batch for predictions
     if dist.is_initialized():
         if rank == 0:
@@ -315,18 +326,23 @@ def visualize(
             gathered_editor_attention = [
                 torch.zeros_like(editor_out.editor_attention) for _ in range(world_size)
             ]
+            gathered_orig_logits = [
+                torch.zeros_like(orig_out.logits) for _ in range(world_size)
+            ]
         else:
             (
                 gathered_logits,
                 gathered_target_hidden_states,
                 gathered_edit_vectors,
                 gathered_editor_attention,
-            ) = None, None, None, None
+                gathered_orig_logits,
+            ) = None, None, None, None, None
 
         dist.gather(editor_out.logits, gathered_logits)
         dist.gather(editor_out.target_hidden_states, gathered_target_hidden_states)
         dist.gather(editor_out.edit_vectors, gathered_edit_vectors)
         dist.gather(editor_out.editor_attention, gathered_editor_attention)
+        dist.gather(orig_out.logits, gathered_orig_logits)
 
     if rank == 0:
         if dist.is_initialized():
@@ -336,8 +352,11 @@ def visualize(
             )
             editor_out.edit_vectors = torch.cat(gathered_edit_vectors, dim=0)
             editor_out.editor_attention = torch.cat(gathered_editor_attention, dim=0)
+            orig_out.logits = torch.cat(gathered_orig_logits, dim=0)
+
         visualize_attn_heatmap(
             result=editor_out,
+            orig_logits=orig_out.logits,
             batch=batch,
             save_path=os.path.join(
                 config.ckpt_dir, config.exp_name, "step-{}".format(step)
@@ -348,7 +367,6 @@ def visualize(
             stopping_index=config.train.stop_editing_idx,
             metadata=config,
         )
-
 
 def save_model_checkpoint(
     step,
@@ -479,6 +497,14 @@ def compute_kl_loss(
     ).sum(-1)
 
     kl_div_loss = kl_div_loss.mean()
+
+    # from torchviz import make_dot
+
+    # make_dot(kl_div_loss, params=dict(editor.named_parameters())).render(
+    #     "assets/kl_div_loss_graph.png", format="png"
+    # )
+    # breakpoint()
+
     penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx).mean()
 
     # gather from all ranks
@@ -532,6 +558,7 @@ def compute_ce_loss(
         ce_loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
     else:
         ce_loss = -(per_token_logps * loss_mask).sum(-1)
+    ce_loss = ce_loss.mean()
 
     penalty_loss = compute_penalty_loss(editor_out, lam, stop_editing_idx).mean()
 

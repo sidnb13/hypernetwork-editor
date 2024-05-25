@@ -17,6 +17,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def visualize_attn_heatmap(
     result: EditorModelOutput,
+    orig_logits: torch.Tensor,
     batch: Dict,
     save_path: str | os.PathLike = None,
     show_plot: bool = False,
@@ -100,10 +101,15 @@ def visualize_attn_heatmap(
         editor_preds = torch.argmax(select_logits.softmax(-1), dim=-1)
         editor_preds = tokenizer.batch_decode(editor_preds, skip_special_tokens=True)
 
+        # model without intervention
+        orig_preds = torch.argmax(orig_logits[batch_index].softmax(-1), dim=-1)
+        orig_preds = tokenizer.batch_decode(orig_preds, skip_special_tokens=True)
+
         if show_plot:
             print("Editing target:", editing_target)
             print("Editor input:", editor_input)
             print("Editor preds:", editor_preds)
+            print("Orig preds:", orig_preds)
 
         if show_plot:
             plt.show()
@@ -123,6 +129,7 @@ def visualize_attn_heatmap(
                 "editing_target": editing_target,
                 "editor_input": editor_input,
                 "editor_preds": editor_preds,
+                "orig_preds": orig_preds,
             }
 
             json.dump(preds, f)

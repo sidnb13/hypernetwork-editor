@@ -271,7 +271,7 @@ class GPT2Editor(nn.Module):
         if stop_editing_idx is not None:
             target_hidden_states = (
                 target_hidden_states[stop_edit_mask]
-                .view(
+                .reshape(
                     target_hidden_states.shape[0],
                     stop_editing_idx,
                     *target_hidden_states.shape[2:],
@@ -347,7 +347,7 @@ class GPT2Editor(nn.Module):
                 device=batch_edit_vectors.device,
                 dtype=batch_edit_vectors.dtype,
             )
-            padded_batch_edits[stop_edit_mask] = batch_edit_vectors.view(
+            padded_batch_edits[stop_edit_mask] = batch_edit_vectors.reshape(
                 -1, *batch_edit_vectors.shape[2:]
             )
             batch_edit_vectors = padded_batch_edits
