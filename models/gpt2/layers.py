@@ -352,7 +352,8 @@ class EditorUnembedCrossAttention(GPT2Attention):
             if i == 0:
                 outputs = (attn_output, present)
                 if output_attentions:
-                    outputs += (attn_weights,)
+                    stacking_dim=1
+                    outputs += (attn_weights.unsqueeze(stacking_dim),)
             else:
                 if use_cache is True:
                     raise ValueError(
@@ -363,12 +364,13 @@ class EditorUnembedCrossAttention(GPT2Attention):
                     # Find which dimension of attn_weights is equal to the number of heads per multiply
                     # Then stack along that dimension
                     # Don't use number of heads equal to 786 until this is cleared up!
-                    stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
+                    #stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
+                   
                     attn_output_old, _, attn_weights_old = outputs
                     attn_output += attn_output_old
 
-                    attn_weights = torch.stack(
-                        (attn_weights_old, attn_weights), dim=stacking_dim
+                    attn_weights = torch.cat(
+                        (attn_weights_old, attn_weights.unsqueeze(1)), dim=stacking_dim
                     )
                     outputs = (attn_output, present, attn_weights)
                 else:
