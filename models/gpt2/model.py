@@ -28,7 +28,7 @@ class GPT2EditorConfig(GPT2Config, EditorConfig):
     init_attn_proj_bias: bool = False
     compute_position_ids: bool = True
     use_ghost_token: bool = False
-    cross_attn_layers: List[int] = []  # mike: are these 3 lines necessary?
+    cross_attn_layers: List[int] = []
     restrict_edit_to_layers: List[int] = []
     restrict_edit_to_positions: List[int] = []
 
@@ -274,6 +274,9 @@ class GPT2Editor(nn.Module):
                 )
         # dimensions of target_hidden_states:
         # batch_size, token_sequence_length, num_layers = 13, resid_width = 768
+
+        if self.config.use_ghost_token:
+            target_attention_mask = ghost_present_attention_mask
 
         mask_sum = target_attention_mask.cumsum(-1)
         mask_sum_min = mask_sum.min(dim=-1)[0]

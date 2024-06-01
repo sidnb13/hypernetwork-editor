@@ -173,7 +173,7 @@ class EditorUnembedCrossAttention(GPT2Attention):
 
         if attention_mask is not None:
             # Apply the attention mask
-            attn_weights = attn_weights + attention_mask
+            attn_weights = attn_weights + (-1e9 * (1 - attention_mask.unsqueeze(1))) #Mike recently implemented this. Does this look right, Sid?
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
@@ -290,25 +290,39 @@ class EditorUnembedCrossAttention(GPT2Attention):
             # print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
             # To construct the mask, we can write the mask in matrix form and then stack along d = 2
 
-            if self.restrict_edit_to_layers != []:
+            if self.config.restrict_edit_to_layers != [] or self.config.restrict_edit_to_positions != []:
                 # initialize the mask
-                mask = torch.zeros(
+                mask = torch.ones(
                     encoder_hidden_states.shape[0],
                     encoder_hidden_states.shape[1] // 13,
                     13,
                 )  # hard-coding the target model's layer count
 
-                for layer in self.restrict_edit_to_layers:
-                    mask[:, :, layer] = 1
+                if self.config.restrict_edit_to_layers == []:
+                    self.config.restrict_edit_to_layers = list(range(13))
+                if self.config.restrict_edit_to_positions == []:
+                    self.config.restrict_edit_to_positions = list(
+                        range(encoder_hidden_states.shape[1] // 13)
+                    )
 
-                for position in self.restrict_edit_to_positions:
-                    mask[:, position, :] = 1
+                all_layers = set(range(13))  # Create a set of numbers from 0 to 12
+                edit_layers = set(self.config.restrict_edit_to_layers)  # Convert restrict_edit_to_layers to a set
+                all_positions = set(range(encoder_hidden_states.shape[1] // 13))
+                edit_positions = set(self.config.restrict_edit_to_positions)
+                layers_to_omit = all_layers - edit_layers
+                positions_to_omit = all_positions - edit_positions
+
+                for layer in layers_to_omit:
+                    mask[:, :, layer] = torch.zeros_like(mask[:, :, layer])
+
+                for position in positions_to_omit:
+                    mask[:, position, :] = torch.zeros_like(mask[:, position, :])
 
                 # Havne't checked, but this next line should be effectively stacking the mask along d=2
-                mask = mask.reshape(encoder_hidden_states.shape[0], -1)
+                mask = mask.reshape(encoder_hidden_states.shape[0], -1).to(hidden_states.device)
 
                 if encoder_attention_mask is not None:
-                    encoder_attention_mask = encoder_attention_mask * mask
+                    encoder_attention_mask = (encoder_attention_mask * mask).to(hidden_states.device)
                 else:
                     encoder_attention_mask = mask
 

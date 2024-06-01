@@ -38,6 +38,9 @@ def main(config: DictConfig):
         kill_token_zero=config.model.kill_token_zero,
         use_ghost_token=config.model.use_ghost_token,
         compute_position_ids=config.model.compute_position_ids,
+        cross_attn_layers=config.model.cross_attn_layers,
+        restrict_edit_to_layers=config.model.restrict_edit_to_layers,
+        restrict_edit_to_positions=config.model.restrict_edit_to_positions,
     )
     editor_model = GPT2Editor(model_config)
 

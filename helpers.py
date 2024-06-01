@@ -41,6 +41,22 @@ def visualize_attn_heatmap(
     for batch_index in range(len(next(iter(batch.values())))):
         # The tensor norm comes in an stopping_index * num_layers+1 matrix
         target_attn_mask = batch["target_attention_mask"][batch_index]
+        target_input_ids = batch["target_input_ids"][batch_index]
+        result_logits = result.logits[batch_index]
+
+        using_ghost_token = False
+        # Add in the ghost token to the mask and target id's
+        if target_attn_mask.shape[0] == result.edit_vectors[batch_index].shape[0] - 1:
+            using_ghost_token = True
+            target_attn_mask = torch.cat(
+                [torch.ones(1, device=target_attn_mask.device), target_attn_mask]
+            )
+            #also add a placeholder token id = 0 to the input_ids
+            target_input_ids = torch.cat(
+                [torch.zeros(1, device=target_input_ids.device, dtype= target_input_ids.dtype), target_input_ids]
+            )
+            
+
         edit_tensor = result.edit_vectors[batch_index][target_attn_mask > 0].cpu()
         target_hidden = result.target_hidden_states[batch_index].cpu()
 
@@ -77,7 +93,7 @@ def visualize_attn_heatmap(
         # Add a title
         plt.title("Edit / Target Norm Heatmap")
 
-        editing_target_tokens = batch["target_input_ids"][batch_index][
+        editing_target_tokens = target_input_ids[
             target_attn_mask > 0
         ]
         if stopping_index is not None:
@@ -93,11 +109,19 @@ def visualize_attn_heatmap(
             ],
             skip_special_tokens=True,
         )
-        select_logits = (
-            result.logits[batch_index][target_attn_mask > 0][:stopping_index].cpu()
-            if stopping_index
-            else result.logits[batch_index][target_attn_mask > 0].cpu()
-        )
+        if using_ghost_token:
+            selection = (target_attn_mask > 0)
+            select_logits = ( 
+                result_logits[selection[1:]][:stopping_index].cpu()
+                if stopping_index
+                else result_logits[target_attn_mask > 0].cpu()
+            )
+        else:
+            select_logits = (
+                result_logits[target_attn_mask > 0][:stopping_index].cpu()
+                if stopping_index
+                else result_logits[target_attn_mask > 0].cpu()
+            )
         editor_preds = torch.argmax(select_logits.softmax(-1), dim=-1)
         editor_preds = tokenizer.batch_decode(editor_preds, skip_special_tokens=True)
 

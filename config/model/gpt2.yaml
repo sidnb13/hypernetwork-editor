@@ -8,3 +8,6 @@ compute_position_ids: true
 edit_dampening_factor: 1.0e-4
 kill_token_zero: false
 use_ghost_token: false
+cross_attn_layers: []
+restrict_edit_to_layers: []
+restrict_edit_to_positions: []
