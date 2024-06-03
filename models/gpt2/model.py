@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Mapping, Optional, Tuple, Union
+from typing import Any, List, Mapping, Optional, Tuple, TypeVar, Union
 
 import torch
 import torch.nn as nn
@@ -22,6 +22,8 @@ from ..utils import (
     assign_layer_indices,
 )
 from .layers import EditorUnembedCrossAttention
+
+T = TypeVar("T", bound="GPT2Editor")
 
 
 class GPT2EditorConfig(GPT2Config, EditorConfig):
@@ -175,10 +177,10 @@ class GPT2Editor(nn.Module):
         else:
             self.layerwise_embeddings = None
 
-    def train(self, mode: bool = True) -> GPT2Editor:
+    def train(self: T, mode: bool = True) -> T:
         return self.hypernetwork.train(mode)
 
-    def eval(self) -> GPT2Editor:
+    def eval(self: T) -> T:
         return self.hypernetwork.eval()
 
     def load_state_dict(

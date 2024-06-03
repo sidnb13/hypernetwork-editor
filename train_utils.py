@@ -44,7 +44,7 @@ def train(
     rank: int,
     world_size: int,
     config: DictConfig,
-    editor: GPT2Editor,
+    editor: torch.nn.Module,
     train_dataloader: DataLoader,
     validation_dataloader: DataLoader = None,
 ):
@@ -132,7 +132,12 @@ def train(
     )
 
     for step in range(start_step, total_steps):
-        editor.hypernetwork.train()
+        # set model to training mode
+        if isinstance(editor, DDP):
+            editor.module.train()
+        else:
+            editor.train()
+
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
@@ -235,14 +240,18 @@ def train(
 def evaluate(
     step,
     val_examples_counter,
-    editor: GPT2Editor,
+    editor: torch.nn.Module,
     tokenizer,
     val_itr,
     rank,
     world_size,
     config,
 ):
-    editor.hypernetwork.eval()
+    # set model to training mode
+    if isinstance(editor, DDP):
+        editor.module.eval()
+    else:
+        editor.eval()
     batch_metrics = {
         "counters/val_examples": val_examples_counter,
         "counters/step": step,
