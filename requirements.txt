@@ -10,3 +10,4 @@ wandb
 jupyter
 graphviz
 torchviz
+jsonlines

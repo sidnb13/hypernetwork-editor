@@ -48,6 +48,15 @@ data:
   test_split: 0.1
   val_split: 0.1
   n_examples: -1
+  target_generation_tokens: 128
+  batch_size: 2048
+  sampling:
+    model: meta-llama/Meta-Llama-3-8B-Instruct
+    template: llama3
+    temperature: 0.8
+    top_p: 0.95
+    top_k: 50
+    max_tokens: 128
 
 wandb:
   enabled: false
