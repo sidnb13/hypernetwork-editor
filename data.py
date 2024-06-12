@@ -196,7 +196,42 @@ def load_wikipedia(config: DictConfig):
 
 @DatasetCache(hash_keys=["task"])
 def load_synthetic(config: DictConfig):
-    pass
+    with jsonlines.open(config.task.data_path, "r") as reader:
+        synthetic_data = []
+        for obj in reader:
+            synthetic_data.append(obj)
+    with jsonlines.open(config.task.continuation_path, "r") as reader:
+        synthetic_continuations = []
+        for obj in reader:
+            synthetic_continuations.append(obj)
+    # merge data and continuations
+    data = [{**a, **b} for a, b in zip(synthetic_data, synthetic_continuations)]
+    dataset = datasets.Dataset.from_list(data)
+
+    def split_sentence_by_entity(entity, sentence):
+        if entity in sentence:
+            before_entity, after_entity = sentence.split(entity, 1)
+            before_entity += entity
+            return before_entity, after_entity.strip()
+        else:
+            return None, None
+
+    def postprocess(row):
+        if row["entity"] in row["sentence"]:
+            row["entity_present"] = True
+            before_entity, after_entity = split_sentence_by_entity(
+                row["entity"], row["sentence"]
+            )
+            row["before_entity"] = before_entity
+            row["after_entity"] = after_entity
+        else:
+            row["entity_present"] = False
+            row["before_entity"] = None
+            row["after_entity"] = None
+
+        return row
+
+    return dataset.map(postprocess)
 
 
 def shuffle_and_select(
@@ -312,7 +347,9 @@ def get_wiki_first_sentences():
 
         return {"first_sentence": first_sentences}
 
-    first_sentences = wiki_data.map(extract_sentences, batched=True)
+    first_sentences = wiki_data.map(extract_sentences, batched=True).filter(
+        lambda x: len(x["first_sentence"]) > 0
+    )
 
     return first_sentences
 

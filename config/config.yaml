@@ -48,7 +48,7 @@ data:
   test_split: 0.1
   val_split: 0.1
   n_examples: -1
-  target_generation_tokens: 128
+  target_generation_tokens: 128 # 50 for wiki task
   batch_size: 2048
   sampling:
     model: meta-llama/Meta-Llama-3-8B-Instruct
