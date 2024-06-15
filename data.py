@@ -195,6 +195,11 @@ def load_wikipedia(config: DictConfig):
 
 
 @DatasetCache(hash_keys=["task"])
+def load_counterfact(config: DictConfig):
+    pass
+
+
+@DatasetCache(hash_keys=["task"])
 def load_synthetic(config: DictConfig):
     with jsonlines.open(config.task.data_path, "r") as reader:
         synthetic_data = []
@@ -231,7 +236,31 @@ def load_synthetic(config: DictConfig):
 
         return row
 
-    return dataset.map(postprocess)
+    processed_dataset = dataset.map(postprocess)
+
+    def tokenize(row_batch: dict, tokenizer=None):
+        editor_inputs = tokenizer(
+            row_batch["new_context"],
+            add_special_tokens=False,
+            max_length=config.task.editor_token_limit,
+            padding="max_length",
+            truncation=True,
+        )
+        target_inputs = tokenizer(
+            row_batch.pop(["sentence"]),
+            max_length=config.model.max_length,
+            add_special_tokens=False,
+            padding="max_length",
+            truncation=True,
+        )
+
+        return {
+            **{"editor_" + k: v for k, v in editor_inputs.items()},
+            **{"target_" + k: v for k, v in target_inputs.items()},
+            **row_batch,
+        }
+
+    return processed_dataset.map(tokenize, batched=True, num_proc=os.cpu_count())
 
 
 def shuffle_and_select(
@@ -375,18 +404,18 @@ def generate_model_continuations(config: DictConfig):
             sampling_params=sampling_params,
         )
         generated_text = list(
-            map(lambda x: {"continuation": x.outputs[0].text}, generations)
+            map(lambda x: {"continuation": x.outputs[0].text.strip()}, generations)
         )
         all_generations.extend(generated_text)
 
     with jsonlines.open(
         os.path.join(
             config.data_dir,
-            f"continuations_synthetic_wiki_data_{len(generated_text)}.jsonl",
+            f"continuations_synthetic_wiki_data_{len(all_generations)}.jsonl",
         ),
         "w",
     ) as writer:
-        writer.write_all(generated_text)
+        writer.write_all(all_generations)
 
 
 def generate_synthetic_wiki_data(config: DictConfig):
@@ -451,7 +480,7 @@ def generate_synthetic_wiki_data(config: DictConfig):
 
     with jsonlines.open(
         os.path.join(
-            config.data_dir, f"synthetic_wiki_data_{len(generated_text)}.jsonl"
+            config.data_dir, f"synthetic_wiki_data_{len(all_generations)}.jsonl"
         ),
         "w",
     ) as writer:
