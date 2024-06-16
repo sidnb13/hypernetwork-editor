@@ -45,6 +45,7 @@ train:
   do_eval: true
 
 data:
+  padding_side: right
   test_split: 0.1
   val_split: 0.1
   n_examples: -1

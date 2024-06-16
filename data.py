@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+from collections import defaultdict
 from functools import partial
 from typing import Any, Callable, List, Literal
 
@@ -194,9 +195,81 @@ def load_wikipedia(config: DictConfig):
     return new_dataset
 
 
+def tokenize(
+    row_batch: dict,
+    tokenizer=None,
+    max_length=None,
+    editor_token_limit=None,
+    instruction_col=None,
+    target_col=None,
+):
+    editor_inputs = tokenizer(
+        row_batch[instruction_col],
+        add_special_tokens=False,
+        max_length=editor_token_limit,
+        padding="max_length",
+        truncation=True,
+    )
+    target_inputs = tokenizer(
+        row_batch[target_col],
+        max_length=max_length,
+        add_special_tokens=False,
+        padding="max_length",
+        truncation=True,
+    )
+
+    return {
+        **{"editor_" + k: v for k, v in editor_inputs.items()},
+        **{"target_" + k: v for k, v in target_inputs.items()},
+        **row_batch,
+    }
+
+
 @DatasetCache(hash_keys=["task"])
 def load_counterfact(config: DictConfig):
-    pass
+    with open(config.task.name_or_path, "r") as f:
+        dataset = datasets.Dataset.from_list(json.load(f))
+    tokenizer = get_tokenizer(
+        config.model.name_or_path, padding_side=config.data.padding_side
+    )
+
+    def preprocess(batch):
+        examples = defaultdict(list)
+        for requested_rewrite, generation_prompts in zip(
+            batch["requested_rewrite"], batch["generation_prompts"]
+        ):
+            instruction = (
+                requested_rewrite["prompt"].format(requested_rewrite["subject"])
+                + " "
+                + requested_rewrite["target_new"]["str"]
+                + ". "
+            )
+            examples["instruction"].extend([instruction] * len(generation_prompts))
+            examples["generation"].extend(generation_prompts)
+
+        return examples
+
+    processed_data = dataset.map(
+        preprocess,
+        batched=True,
+        num_proc=os.cpu_count(),
+        remove_columns=[
+            c for c in dataset.column_names if c not in ["instruction", "generation"]
+        ],
+    )
+    tokenized_data = processed_data.map(
+        partial(
+            tokenize,
+            tokenizer=tokenizer,
+            max_length=config.model.max_length,
+            editor_token_limit=config.task.editor_token_limit,
+            instruction_col="instruction",
+            target_col="generation",
+        ),
+        batched=True,
+        num_proc=os.cpu_count(),
+    )
+    return tokenized_data
 
 
 @DatasetCache(hash_keys=["task"])
@@ -212,6 +285,9 @@ def load_synthetic(config: DictConfig):
     # merge data and continuations
     data = [{**a, **b} for a, b in zip(synthetic_data, synthetic_continuations)]
     dataset = datasets.Dataset.from_list(data)
+    tokenizer = get_tokenizer(
+        config.model.name_or_path, padding_side=config.data.padding_side
+    )
 
     def split_sentence_by_entity(entity, sentence):
         if entity in sentence:
@@ -238,29 +314,18 @@ def load_synthetic(config: DictConfig):
 
     processed_dataset = dataset.map(postprocess)
 
-    def tokenize(row_batch: dict, tokenizer=None):
-        editor_inputs = tokenizer(
-            row_batch["new_context"],
-            add_special_tokens=False,
-            max_length=config.task.editor_token_limit,
-            padding="max_length",
-            truncation=True,
-        )
-        target_inputs = tokenizer(
-            row_batch.pop(["sentence"]),
+    return processed_dataset.map(
+        partial(
+            tokenize,
+            tokenizer=tokenizer,
             max_length=config.model.max_length,
-            add_special_tokens=False,
-            padding="max_length",
-            truncation=True,
-        )
-
-        return {
-            **{"editor_" + k: v for k, v in editor_inputs.items()},
-            **{"target_" + k: v for k, v in target_inputs.items()},
-            **row_batch,
-        }
-
-    return processed_dataset.map(tokenize, batched=True, num_proc=os.cpu_count())
+            editor_token_limit=config.model.editor_token_limit,
+            instruction_col="instruction",
+            target_col="target",
+        ),
+        batched=True,
+        num_proc=os.cpu_count(),
+    )
 
 
 def shuffle_and_select(
