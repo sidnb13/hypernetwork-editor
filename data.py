@@ -11,6 +11,7 @@ from typing import Any, Callable, List, Literal
 import datasets
 import jsonlines
 import torch.distributed as dist
+import transformers
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from vllm import LLM, SamplingParams
@@ -221,22 +222,20 @@ def tokenize(
     return {
         **{"editor_" + k: v for k, v in editor_inputs.items()},
         **{"target_" + k: v for k, v in target_inputs.items()},
-        **row_batch,
     }
 
 
 @DatasetCache(hash_keys=["task"])
 def load_counterfact(config: DictConfig):
-    with open(config.task.name_or_path, "r") as f:
-        dataset = datasets.Dataset.from_list(json.load(f))
+    dataset = datasets.load_from_disk(config.task.name_or_path)
     tokenizer = get_tokenizer(
         config.model.name_or_path, padding_side=config.data.padding_side
     )
 
     def preprocess(batch):
         examples = defaultdict(list)
-        for requested_rewrite, generation_prompts in zip(
-            batch["requested_rewrite"], batch["generation_prompts"]
+        for requested_rewrite, continuations in zip(
+            batch["requested_rewrite"], batch["generation_continuations"]
         ):
             instruction = (
                 requested_rewrite["prompt"].format(requested_rewrite["subject"])
@@ -244,8 +243,8 @@ def load_counterfact(config: DictConfig):
                 + requested_rewrite["target_new"]["str"]
                 + ". "
             )
-            examples["instruction"].extend([instruction] * len(generation_prompts))
-            examples["generation"].extend(generation_prompts)
+            examples["editor"].extend([instruction] * len(continuations))
+            examples["target"].extend(continuations)
 
         return examples
 
@@ -254,8 +253,9 @@ def load_counterfact(config: DictConfig):
         batched=True,
         num_proc=os.cpu_count(),
         remove_columns=[
-            c for c in dataset.column_names if c not in ["instruction", "generation"]
+            c for c in dataset.column_names if c not in ["editor", "target"]
         ],
+        load_from_cache_file=False,
     )
     tokenized_data = processed_data.map(
         partial(
@@ -263,11 +263,13 @@ def load_counterfact(config: DictConfig):
             tokenizer=tokenizer,
             max_length=config.model.max_length,
             editor_token_limit=config.task.editor_token_limit,
-            instruction_col="instruction",
-            target_col="generation",
+            instruction_col="editor",
+            target_col="target",
         ),
         batched=True,
         num_proc=os.cpu_count(),
+        load_from_cache_file=False,
+        remove_columns=processed_data.column_names,
     )
     return tokenized_data
 
@@ -312,7 +314,7 @@ def load_synthetic(config: DictConfig):
 
         return row
 
-    processed_dataset = dataset.map(postprocess)
+    processed_dataset = dataset.map(postprocess, load_from_cache_file=False)
 
     return processed_dataset.map(
         partial(
@@ -325,6 +327,8 @@ def load_synthetic(config: DictConfig):
         ),
         batched=True,
         num_proc=os.cpu_count(),
+        load_from_cache_file=False,
+        remove_columns=processed_dataset.column_names,
     )
 
 
@@ -391,6 +395,7 @@ def get_dataloader(
         if "train" in split
         else config.train.validation_batch_size,
         shuffle=True if "train" in split else False,
+        collate_fn=partial(transformers.default_data_collator, return_tensors="pt"),
         # generator=generator, #also added this line, see comment above
     )
 
@@ -448,7 +453,7 @@ def get_wiki_first_sentences():
     return first_sentences
 
 
-def generate_model_continuations(config: DictConfig):
+def generate_wiki_model_continuations(config: DictConfig):
     wiki_data = get_wiki_first_sentences()
     if config.data.n_examples > 0:
         wiki_data = wiki_data.select(range(config.data.n_examples))

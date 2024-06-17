@@ -8,8 +8,6 @@ import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
 
 from data import (
-    generate_model_continuations,
-    generate_synthetic_wiki_data,
     get_dataloader,
     get_task,
 )
@@ -90,12 +88,6 @@ def main(config: DictConfig):
             )
         else:
             train(0, 1, config, editor_model, train_dataloader, validation_dataloader)
-    elif config.mode == "data_synthetic":
-        # generate synthetic data
-        generate_synthetic_wiki_data(config)
-    elif config.mode == "data_continuation":
-        # continuations with target model
-        generate_model_continuations(config)
 
 
 if __name__ == "__main__":
