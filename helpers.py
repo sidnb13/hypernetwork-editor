@@ -17,7 +17,7 @@ from models.utils import EditorModelOutput
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def visualize_attn_heatmap(
+def visualize_interventions(
     result: EditorModelOutput,
     orig_logits: torch.Tensor,
     batch: Dict,

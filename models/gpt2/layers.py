@@ -173,7 +173,9 @@ class EditorUnembedCrossAttention(GPT2Attention):
 
         if attention_mask is not None:
             # Apply the attention mask
-            attn_weights = attn_weights + (-1e9 * (1 - attention_mask.unsqueeze(1))) #Mike recently implemented this. Does this look right, Sid?
+            attn_weights = attn_weights + (
+                -1e9 * (1 - attention_mask.unsqueeze(1))
+            )  # Mike recently implemented this. Does this look right, Sid?
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
@@ -290,24 +292,35 @@ class EditorUnembedCrossAttention(GPT2Attention):
             # print(encoder_hidden_states.shape) #torch.Size([8, 104, 768]) #I believe this is the result of torch.stacking a [8, 8, 13, 768] tensor along d=2
             # To construct the mask, we can write the mask in matrix form and then stack along d = 2
 
-            if self.config.restrict_edit_to_layers != [] or self.config.restrict_edit_to_positions != []:
+            if (
+                self.config.restrict_edit_to_layers != []
+                or self.config.restrict_edit_to_positions != []
+            ):
                 # initialize the mask
                 mask = torch.ones(
                     encoder_hidden_states.shape[0],
-                    encoder_hidden_states.shape[1] // 13,
-                    13,
+                    encoder_hidden_states.shape[1] // self.config.n_layer,
+                    self.config.n_layer,
                 )  # hard-coding the target model's layer count
 
                 if self.config.restrict_edit_to_layers == []:
-                    self.config.restrict_edit_to_layers = list(range(13))
+                    self.config.restrict_edit_to_layers = list(
+                        range(self.config.n_layer)
+                    )
                 if self.config.restrict_edit_to_positions == []:
                     self.config.restrict_edit_to_positions = list(
-                        range(encoder_hidden_states.shape[1] // 13)
+                        range(encoder_hidden_states.shape[1] // self.config.n_layer)
                     )
 
-                all_layers = set(range(13))  # Create a set of numbers from 0 to 12
-                edit_layers = set(self.config.restrict_edit_to_layers)  # Convert restrict_edit_to_layers to a set
-                all_positions = set(range(encoder_hidden_states.shape[1] // 13))
+                all_layers = set(
+                    range(self.config.n_layer)
+                )  # Create a set of numbers from 0 to 12
+                edit_layers = set(
+                    self.config.restrict_edit_to_layers
+                )  # Convert restrict_edit_to_layers to a set
+                all_positions = set(
+                    range(encoder_hidden_states.shape[1] // self.config.n_layer)
+                )
                 edit_positions = set(self.config.restrict_edit_to_positions)
                 layers_to_omit = all_layers - edit_layers
                 positions_to_omit = all_positions - edit_positions
@@ -319,10 +332,14 @@ class EditorUnembedCrossAttention(GPT2Attention):
                     mask[:, position, :] = torch.zeros_like(mask[:, position, :])
 
                 # Havne't checked, but this next line should be effectively stacking the mask along d=2
-                mask = mask.reshape(encoder_hidden_states.shape[0], -1).to(hidden_states.device)
+                mask = mask.reshape(encoder_hidden_states.shape[0], -1).to(
+                    hidden_states.device
+                )
 
                 if encoder_attention_mask is not None:
-                    encoder_attention_mask = (encoder_attention_mask * mask).to(hidden_states.device)
+                    encoder_attention_mask = (encoder_attention_mask * mask).to(
+                        hidden_states.device
+                    )
                 else:
                     encoder_attention_mask = mask
 
@@ -366,7 +383,7 @@ class EditorUnembedCrossAttention(GPT2Attention):
             if i == 0:
                 outputs = (attn_output, present)
                 if output_attentions:
-                    stacking_dim=1
+                    stacking_dim = 1
                     outputs += (attn_weights.unsqueeze(stacking_dim),)
             else:
                 if use_cache is True:
@@ -378,8 +395,8 @@ class EditorUnembedCrossAttention(GPT2Attention):
                     # Find which dimension of attn_weights is equal to the number of heads per multiply
                     # Then stack along that dimension
                     # Don't use number of heads equal to 786 until this is cleared up!
-                    #stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
-                   
+                    # stacking_dim = attn_weights.shape.index(self.heads_per_multiply)
+
                     attn_output_old, _, attn_weights_old = outputs
                     attn_output += attn_output_old
 

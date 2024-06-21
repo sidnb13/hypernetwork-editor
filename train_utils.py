@@ -19,7 +19,7 @@ import wandb
 from helpers import (
     concat_and_pad_ids,
     slice_and_move_batch_for_device,
-    visualize_attn_heatmap,
+    visualize_interventions,
 )
 from logger import get_logger
 from models.gpt2 import GPT2Editor
@@ -314,7 +314,7 @@ def visualize(
     world_size,
     config,
 ):
-    # save attention visualizations
+    # save intervention visualizations
     local_minibatch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
         **local_minibatch,
@@ -376,7 +376,7 @@ def visualize(
             editor_out.editor_attention = torch.cat(gathered_editor_attention, dim=0)
             orig_out.logits = torch.cat(gathered_orig_logits, dim=0)
 
-        visualize_attn_heatmap(
+        visualize_interventions(
             result=editor_out,
             orig_logits=orig_out.logits,
             batch=batch,
