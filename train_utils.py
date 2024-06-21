@@ -58,7 +58,8 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(config.model.name_or_path)
 
     opt = torch.optim.AdamW(
-        editor.parameters(),
+        #editor.parameters(),
+        [param for param in editor.parameters() if param.requires_grad], #this still is not sufficient to shut things off though...
         lr=config.train.lr,
         weight_decay=config.train.weight_decay,
         betas=(config.train.adam_beta1, config.train.adam_beta2),
@@ -168,6 +169,13 @@ def train(
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 editor.parameters(), config.train.max_grad_norm
             )
+            # #### Don't forget to delete this!! this zero's out the cross-attention learning entirely!!
+            # for name, param in editor.named_parameters():
+            #     if 'transformer.h' in name and 'crossattention' in name:
+            #         param.data.zero_()  # Zero out the data
+            #         param.requires_grad = False  # Disable gradients for these parameters
+            #         if param.grad is not None:
+            #             param.grad.zero_()  # Zero out the gradients if they exist
             opt.step()
             opt.zero_grad()
             scheduler.step()

@@ -34,6 +34,9 @@ class GPT2EditorConfig(GPT2Config, EditorConfig):
     restrict_edit_to_layers: List[int] = []
     restrict_edit_to_positions: List[int] = []
 
+class CustomIdentity(nn.Identity):
+    def forward(self, input, *args, **kwargs):
+        return input
 
 class GPT2EditorHypernetwork(GPT2LMHeadModel):
     _tied_weights_keys = []
@@ -52,30 +55,55 @@ class GPT2EditorHypernetwork(GPT2LMHeadModel):
         )
 
         # prune layers and add cross attn heads
-        self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
+        if config.chop_editor_at_layer == 0:
+            self.transformer.h = nn.ModuleList([CustomIdentity()])
+        else:
+            self.transformer.h = self.transformer.h[: config.chop_editor_at_layer]
+
         if config.cross_attn_layers == []:
             config.cross_attn_layers = list(range(config.chop_editor_at_layer))
 
-        for i, layer in enumerate(self.transformer.h):
-            if i not in config.cross_attn_layers:
-                continue
-            layer.crossattention = _attention_cls(
-                config=config, layer_idx=i, is_cross_attention=True
-            )
-            layer.ln_cross_attn = nn.LayerNorm(
-                config.hidden_size, eps=config.layer_norm_epsilon
-            )
-            original_query_weights = layer.attn.c_attn.weight[:, : config.hidden_size]
-            original_keys_values = layer.attn.c_attn.weight[:, config.hidden_size :]
-            original_query_bias = layer.attn.c_attn.bias[: config.hidden_size]
-            original_keys_values_bias = layer.attn.c_attn.bias[config.hidden_size :]
+        if config.chop_editor_at_layer != 0:
+            for i, layer in enumerate(self.transformer.h):
+                ### if i not in config.cross_attn_layers:
+                ###     continue
+                layer.crossattention = _attention_cls(
+                    config=config, layer_idx=i, is_cross_attention=True
+                )
+                layer.ln_cross_attn = nn.LayerNorm(
+                    config.hidden_size, eps=config.layer_norm_epsilon
+                )
+                original_query_weights = layer.attn.c_attn.weight[:, : config.hidden_size]
+                original_keys_values = layer.attn.c_attn.weight[:, config.hidden_size :]
+                original_query_bias = layer.attn.c_attn.bias[: config.hidden_size]
+                original_keys_values_bias = layer.attn.c_attn.bias[config.hidden_size :]
 
-            # with torch.no_grad():
-            # Initialize the new layer with these parameters
-            layer.crossattention.q_attn.weight = nn.Parameter(original_query_weights)
-            layer.crossattention.q_attn.bias = nn.Parameter(original_query_bias)
-            layer.crossattention.c_attn.weight = nn.Parameter(original_keys_values)
-            layer.crossattention.c_attn.bias = nn.Parameter(original_keys_values_bias)
+                # with torch.no_grad():
+                # Initialize the new layer with these parameters
+                # just added calls to .detach()
+                layer.crossattention.q_attn.weight = nn.Parameter(original_query_weights.detach())
+                layer.crossattention.q_attn.bias = nn.Parameter(original_query_bias.detach())
+                layer.crossattention.c_attn.weight = nn.Parameter(original_keys_values.detach())
+                layer.crossattention.c_attn.bias = nn.Parameter(original_keys_values_bias.detach())
+
+                ### Jankiness: I think this is a way of shutting everything off?
+                # #if i not in config.cross_attn_layers:
+                #     #set them all to zero and kill gradient
+                # layer.crossattention.q_attn.weight.data.zero_()
+                # layer.crossattention.q_attn.bias.data.zero_()
+                # layer.crossattention.c_attn.weight.data.zero_()
+                # layer.crossattention.c_attn.bias.data.zero_()
+                # layer.crossattention.c_proj.weight.data.zero_()
+                # layer.crossattention.c_proj.bias.data.zero_()
+
+                # layer.crossattention.q_attn.weight.requires_grad = False
+                # layer.crossattention.q_attn.bias.requires_grad = False
+                # layer.crossattention.c_attn.weight.requires_grad = False
+                # layer.crossattention.c_attn.bias.requires_grad = False
+                # layer.crossattention.c_proj.weight.requires_grad = False
+                # layer.crossattention.c_proj.bias.requires_grad = False
+
+                #currently not working? some gradients are passing thru
 
         # Model parallel
         self.model_parallel = False

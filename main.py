@@ -49,6 +49,7 @@ def main(config: DictConfig):
         restrict_edit_to_layers=config.model.restrict_edit_to_layers,
         restrict_edit_to_positions=config.model.restrict_edit_to_positions,
     )
+
     editor_model = GPT2Editor(model_config)
 
     if config.mode == "train":
