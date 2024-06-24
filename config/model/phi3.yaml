@@ -1,6 +1,6 @@
-name_or_path: gpt2
-model_cls: GPT2Editor
-config_cls: GPT2EditorConfig
+name_or_path: microsoft/Phi-3-mini-4k-instruct
+model_cls: Phi3Editor
+config_cls: Phi3EditorConfig
 max_length: 512
 edit_channel_multiply_factor: 2
 chop_editor_at_layer: 6

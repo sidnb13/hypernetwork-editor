@@ -7,13 +7,13 @@ import torch
 import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
 
+import models
 from data import (
     get_dataloader,
     get_task,
 )
 from helpers import get_nb_trainable_parameters
 from logger import get_logger
-from models.gpt2 import GPT2Editor, GPT2EditorConfig
 from train_utils import train
 
 logger = get_logger(__name__)
@@ -35,8 +35,11 @@ def main(config: DictConfig):
     os.makedirs(config.data_dir, exist_ok=True)
     os.makedirs(config.ckpt_dir, exist_ok=True)
 
-    model_config = GPT2EditorConfig(
-        name_or_path=config.model,
+    config_cls = getattr(models, config.model.config_cls)
+    model_cls = getattr(models, config.model.model_cls)
+
+    model_config = config_cls(
+        _name_or_path=config.model.name_or_path,
         edit_channel_multiply_factor=config.model.edit_channel_multiply_factor,
         chop_editor_at_layer=config.model.chop_editor_at_layer,
         num_editing_heads=config.model.num_editing_heads,
@@ -45,12 +48,12 @@ def main(config: DictConfig):
         kill_token_zero=config.model.kill_token_zero,
         use_ghost_token=config.model.use_ghost_token,
         compute_position_ids=config.model.compute_position_ids,
-        cross_attn_layers=config.model.cross_attn_layers,
-        restrict_edit_to_layers=config.model.restrict_edit_to_layers,
-        restrict_edit_to_positions=config.model.restrict_edit_to_positions,
+        cross_attn_layers=list(config.model.cross_attn_layers),
+        restrict_edit_to_layers=list(config.model.restrict_edit_to_layers),
+        restrict_edit_to_positions=list(config.model.restrict_edit_to_positions),
     )
 
-    editor_model = GPT2Editor(model_config)
+    editor_model = model_cls(model_config)
 
     if config.mode == "train":
         train_dataloader = get_dataloader(

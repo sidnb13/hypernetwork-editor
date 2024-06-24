@@ -259,64 +259,6 @@ def load_counterfact(config: DictConfig):
     return tokenized_data
 
 
-@DatasetCache(hash_keys=["task"])
-def load_synthetic(config: DictConfig):
-    with jsonlines.open(config.task.data_path, "r") as reader:
-        synthetic_data = []
-        for obj in reader:
-            synthetic_data.append(obj)
-    with jsonlines.open(config.task.continuation_path, "r") as reader:
-        synthetic_continuations = []
-        for obj in reader:
-            synthetic_continuations.append(obj)
-    # merge data and continuations
-    data = [{**a, **b} for a, b in zip(synthetic_data, synthetic_continuations)]
-    dataset = datasets.Dataset.from_list(data)
-    tokenizer = get_tokenizer(
-        config.model.name_or_path, padding_side=config.data.padding_side
-    )
-
-    def split_sentence_by_entity(entity, sentence):
-        if entity in sentence:
-            before_entity, after_entity = sentence.split(entity, 1)
-            before_entity += entity
-            return before_entity, after_entity.strip()
-        else:
-            return None, None
-
-    def postprocess(row):
-        if row["entity"] in row["sentence"]:
-            row["entity_present"] = True
-            before_entity, after_entity = split_sentence_by_entity(
-                row["entity"], row["sentence"]
-            )
-            row["before_entity"] = before_entity
-            row["after_entity"] = after_entity
-        else:
-            row["entity_present"] = False
-            row["before_entity"] = None
-            row["after_entity"] = None
-
-        return row
-
-    processed_dataset = dataset.map(postprocess, load_from_cache_file=False)
-
-    return processed_dataset.map(
-        partial(
-            tokenize,
-            tokenizer=tokenizer,
-            max_length=config.model.max_length,
-            editor_token_limit=config.model.editor_token_limit,
-            instruction_col="instruction",
-            target_col="target",
-        ),
-        batched=True,
-        num_proc=os.cpu_count(),
-        load_from_cache_file=False,
-        remove_columns=processed_dataset.column_names,
-    )
-
-
 def shuffle_and_select(
     dataset,
     split: Literal["val", "test", "train"],
