@@ -58,8 +58,10 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(config.model.name_or_path)
 
     opt = torch.optim.AdamW(
-        #editor.parameters(),
-        [param for param in editor.parameters() if param.requires_grad], #this still is not sufficient to shut things off though...
+        # editor.parameters(),
+        [
+            param for param in editor.parameters() if param.requires_grad
+        ],  # this still is not sufficient to shut things off though...
         lr=config.train.lr,
         weight_decay=config.train.weight_decay,
         betas=(config.train.adam_beta1, config.train.adam_beta2),
@@ -69,7 +71,7 @@ def train(
         total_steps = config.train.steps // config.train.gradient_accumulation_steps
     else:
         total_steps = (
-            config.train.epochs
+            config.train.n_epochs
             * len(train_dataloader)
             // config.train.gradient_accumulation_steps
         )
@@ -103,7 +105,7 @@ def train(
             project=config.wandb.project,
             name=config.exp_name,
             notes=config.wandb.notes,
-            config=dict(config),
+            config=OmegaConf.to_container(config),
             entity=config.wandb.entity,
             tags=config.wandb.tags,
             group=config.wandb.group,
@@ -126,6 +128,7 @@ def train(
         logger.info(f"Skipped {start_step} steps...")
 
     grad_acc_steps = 0
+    updates = 0
     train_examples_counter = val_examples_counter = 0
 
     logger.info(
@@ -179,6 +182,7 @@ def train(
             opt.step()
             opt.zero_grad()
             scheduler.step()
+            updates += 1
 
             batch_metrics = {
                 "loss/train": loss.detach().item()
@@ -188,6 +192,7 @@ def train(
                 "lr": opt.param_groups[0]["lr"],
                 "counters/train_examples": train_examples_counter,
                 "counters/step": step,
+                "counters/updates": updates,
                 "counters/epoch": step / len(train_dataloader),
                 "grad_norm": grad_norm.item(),
             }
