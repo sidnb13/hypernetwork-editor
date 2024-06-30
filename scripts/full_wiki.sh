@@ -14,8 +14,8 @@ python3 main.py \
     ++train.loss=ce \
     ++train.use_ddp=false \
     ++train.log_interval=10 \
-    ++train.train_batch_size=96 \
-    ++train.validation_batch_size=96 \
+    ++train.train_batch_size=64 \
+    ++train.validation_batch_size=64 \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
@@ -23,4 +23,4 @@ python3 main.py \
     ++train.lr=3e-4 \
     ++train.scheduler=cosine \
     ++wandb.enabled=true \
-    ++wandb.group=wikipedia-full-sweep-ce
+    ++wandb.group=wikipedia-full-sweep-ce-1

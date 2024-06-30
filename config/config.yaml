@@ -12,6 +12,7 @@ resume_ckpt: null
 
 exp_name: null
 seed: 42
+debug: false
 
 train:
   use_ddp: false

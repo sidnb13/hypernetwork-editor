@@ -100,7 +100,7 @@ def train(
         start_step = load_model_checkpoint(
             rank, config.resume_ckpt, editor, opt, scheduler, config
         )
-    elif config.wandb.enabled and rank == 0:
+    elif config.wandb.enabled and rank == 0 and not config.debug:
         wandb.init(
             project=config.wandb.project,
             name=config.exp_name,
@@ -298,15 +298,16 @@ def evaluate(
     if wandb.run and rank == 0:
         wandb.log(batch_metrics)
 
-    visualize(
-        editor,
-        tokenizer,
-        val_batch,
-        step,
-        rank,
-        world_size,
-        config,
-    )
+    if not config.debug:
+        visualize(
+            editor,
+            tokenizer,
+            val_batch,
+            step,
+            rank,
+            world_size,
+            config,
+        )
 
 
 @torch.no_grad()
@@ -404,6 +405,8 @@ def save_model_checkpoint(
     config: DictConfig,
 ):
     """Save a model checkpoint"""
+    if config.debug:
+        return
 
     model_obj = model.module if isinstance(model, DDP) else model
     state_dict = {

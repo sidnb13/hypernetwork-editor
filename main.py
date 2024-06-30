@@ -31,9 +31,11 @@ def main(config: DictConfig):
 
     torch.manual_seed(config.seed)
     random.seed(config.seed)
+    torch.cuda.empty_cache()
 
-    os.makedirs(config.data_dir, exist_ok=True)
-    os.makedirs(config.ckpt_dir, exist_ok=True)
+    if not config.debug:
+        os.makedirs(config.data_dir, exist_ok=True)
+        os.makedirs(config.ckpt_dir, exist_ok=True)
 
     config_cls = getattr(models, config.model.config_cls)
     model_cls = getattr(models, config.model.model_cls)
