@@ -71,8 +71,7 @@ def train(
         total_steps = config.train.steps // config.train.gradient_accumulation_steps
     else:
         total_steps = (
-            config.train.n_epochs
-            * len(train_dataloader)
+            int(config.train.n_epochs * len(train_dataloader))
             // config.train.gradient_accumulation_steps
         )
     warmup_steps = (
@@ -237,6 +236,9 @@ def train(
                 save_model_checkpoint(step, editor, opt, scheduler, config)
 
     logger.info("Finished training")
+
+    if wandb.run and rank == 0:
+        wandb.finish()
 
     if config.train.do_save:
         logger.info("Saving final model checkpoint")

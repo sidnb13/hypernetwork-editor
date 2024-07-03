@@ -10,7 +10,7 @@ python3 main.py \
     ++model.edit_channel_multiply_factor=16 \
     ++model.compute_position_ids=false \
     ++model.use_ghost_token=false \
-    ++model.chop_editor_at_layer=1,6,12 \
+    ++model.chop_editor_at_layer=12 \
     ++train.loss=ce \
     ++train.use_ddp=false \
     ++train.log_interval=10 \
@@ -19,7 +19,7 @@ python3 main.py \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
-    ++train.n_epochs=1 \
+    ++train.n_epochs=0.1 \
     ++train.lr=3e-4 \
     ++train.scheduler=cosine \
     ++wandb.enabled=true \
