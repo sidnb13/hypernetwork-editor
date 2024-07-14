@@ -1,3 +1,8 @@
 name: wikipedia
 editor_token_limit: 50
 followup_char_limit: 500
+
+seq_a: 192
+seq_b: 32
+seq_c: 96
+seq_d: 192

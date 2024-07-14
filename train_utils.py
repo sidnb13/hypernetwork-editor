@@ -17,6 +17,7 @@ from transformers import (
 
 import wandb
 from helpers import (
+    compute_l0_l1_norms,
     concat_and_pad_ids,
     slice_and_move_batch_for_device,
     visualize_interventions,
@@ -144,7 +145,7 @@ def train(
         train_batch = next(train_itr)
         # compute loss
         if config.train.loss == "kl":
-            loss, kl_loss, penalty_loss = compute_kl_loss(
+            loss, kl_loss, penalty_loss, out = compute_kl_loss(
                 editor,
                 train_batch,
                 rank,
@@ -153,7 +154,7 @@ def train(
             )
             ce_loss = None
         else:
-            loss, ce_loss, penalty_loss = compute_ce_loss(
+            loss, ce_loss, penalty_loss, out = compute_ce_loss(
                 editor,
                 train_batch,
                 rank,
@@ -183,11 +184,15 @@ def train(
             scheduler.step()
             updates += 1
 
+            l0, l1 = compute_l0_l1_norms(out.edit_vectors)
+
             batch_metrics = {
                 "loss/train": loss.detach().item()
                 if loss.dim() == 0
                 else loss.detach().mean().item(),
                 "penalty/train": penalty_loss.detach().item(),
+                "train_metrics/l1": l1,
+                "train_metrics/l0": l0,
                 "lr": opt.param_groups[0]["lr"],
                 "counters/train_examples": train_examples_counter,
                 "counters/step": step,
@@ -273,7 +278,7 @@ def evaluate(
     }
     val_batch = next(val_itr)
     if config.train.loss == "kl":
-        loss, kl_loss, penalty_loss = compute_kl_loss(
+        loss, kl_loss, penalty_loss, out = compute_kl_loss(
             editor,
             val_batch,
             rank,
@@ -282,7 +287,7 @@ def evaluate(
         )
         batch_metrics["kl/val"] = kl_loss.detach().item()
     else:
-        loss, ce_loss, penalty_loss = compute_ce_loss(
+        loss, ce_loss, penalty_loss, out = compute_ce_loss(
             editor,
             val_batch,
             rank,
@@ -291,6 +296,10 @@ def evaluate(
         )
         batch_metrics["ce/val"] = ce_loss.detach().item()
 
+    l0, l1 = compute_l0_l1_norms(out.edit_vectors)
+
+    batch_metrics["val_metrics/l1"] = l1
+    batch_metrics["val_metrics/l0"] = l0
     batch_metrics["loss/penalty"] = penalty_loss.detach().item()
     batch_metrics["loss/val"] = (
         loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
@@ -541,11 +550,7 @@ def compute_kl_loss(
     kl_div_loss = kl_div_loss / world_size
     penalty_loss = penalty_loss / world_size
 
-    return (
-        kl_div_loss + penalty_loss,
-        kl_div_loss,
-        penalty_loss,
-    )
+    return (kl_div_loss + penalty_loss, kl_div_loss, penalty_loss, editor_out)
 
 
 def compute_ce_loss(
@@ -596,4 +601,4 @@ def compute_ce_loss(
     penalty_loss = penalty_loss / world_size
 
     loss = ce_loss + penalty_loss
-    return loss, ce_loss, penalty_loss
+    return loss, ce_loss, penalty_loss, editor_out

@@ -9,14 +9,12 @@ from functools import partial
 from typing import Any, Callable, List, Literal
 
 import datasets
-import jsonlines
 import torch.distributed as dist
 import transformers
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from vllm import LLM, SamplingParams
 
-from helpers import ROOT_DIR, get_conv_template, get_tokenizer
+from helpers import ROOT_DIR, get_tokenizer
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -90,64 +88,70 @@ def load_wikipedia(config: DictConfig):
 
     assert tokenizer.padding_side == "right", "padding_side must be 'right'"
 
-    def extract_sentences(texts: dict):
-        first_sentences = []
-        second_sentences = []
-        third_sentences = []
+    def extract_segments(texts: dict):
+        segment_a = []
+        segment_b = []
+        segment_c = []
+        segment_d = []
 
         for text in texts["text"]:
-            # Split the text into sentences
-            sentences = text.split(". ")
-            # Extract the first sentence
-            first_sentence = sentences[0] if len(sentences) > 0 else ""
-            first_sentences.append(first_sentence + "." if first_sentence else "")
-            # Extract the second sentence, if it exists
-            second_sentence = sentences[1] if len(sentences) > 1 else ""
-            second_sentences.append(second_sentence + "." if second_sentence else "")
-            # Extract the third sentence, if it exists
-            third_sentence = sentences[2] if len(sentences) > 2 else ""
-            third_sentences.append(third_sentence + "." if third_sentence else "")
+            # Split the text into 4 segments
+            total_chars = len(text)
+            a_end = min(config.task.seq_a, total_chars)
+            b_end = min(a_end + config.task.seq_b, total_chars)
+            c_end = min(b_end + config.task.seq_c, total_chars)
+
+            segment_a.append(text[:a_end])
+            segment_b.append(text[a_end:b_end])
+            segment_c.append(text[b_end:c_end])
+            segment_d.append(text[c_end:])
 
         return {
-            "first_sentence": first_sentences,
-            "second_sentence": second_sentences,
-            "third_sentence": third_sentences,
+            "segment_a": segment_a,
+            "segment_b": segment_b,
+            "segment_c": segment_c,
+            "segment_d": segment_d,
         }
 
-    new_dataset = dataset.map(extract_sentences, batched=True, num_proc=os.cpu_count())
+    new_dataset = dataset.map(extract_segments, batched=True, num_proc=os.cpu_count())
 
     new_dataset = new_dataset.remove_columns(["text", "url", "id"])
     new_dataset = new_dataset.filter(
-        lambda row: len(row["first_sentence"]) >= 5
-        and len(row["second_sentence"]) >= 10
-        and (0 < len(row["third_sentence"]) <= 100),
+        lambda row: all(
+            len(seg) > 0
+            for seg in [
+                row["segment_a"],
+                row["segment_b"],
+                row["segment_c"],
+                row["segment_d"],
+            ]
+        ),
         num_proc=os.cpu_count(),
     )
 
     def tokenize(row_batch: dict, tokenizer=None):
-        # Compose second_sentences and third_sentences
-        followup_text = [
-            second_sentence + " " + third_sentence
-            for second_sentence, third_sentence in zip(
-                row_batch["second_sentence"], row_batch["third_sentence"]
-            )
-        ]
-        # Select the first 500 characters
-        followup_text = [
-            text[: config.task.followup_char_limit] for text in followup_text
+        # Concatenate segments A and D for editor inputs
+        editor_text = [
+            a + " " + d for a, d in zip(row_batch["segment_a"], row_batch["segment_d"])
         ]
 
-        target_inputs = tokenizer(
-            followup_text,
+        # Concatenate segments B and C for target inputs
+        target_text = [
+            b + " " + c for b, c in zip(row_batch["segment_b"], row_batch["segment_c"])
+        ]
+
+        editor_inputs = tokenizer(
+            editor_text,
+            max_length=config.model.max_length,
             add_special_tokens=False,
-            max_length=config.task.editor_token_limit,
             padding="max_length",
             truncation=True,
         )
-        editor_inputs = tokenizer(
-            row_batch["first_sentence"],
-            max_length=config.model.max_length,
+
+        target_inputs = tokenizer(
+            target_text,
             add_special_tokens=False,
+            max_length=config.task.editor_token_limit,
             padding="max_length",
             truncation=True,
         )
@@ -163,6 +167,7 @@ def load_wikipedia(config: DictConfig):
         num_proc=os.cpu_count(),
         fn_kwargs={"tokenizer": tokenizer},
     )
+
     # filter empty target sequences
     limit = config.train.stop_editing_idx or 0
     new_dataset = new_dataset.filter(
