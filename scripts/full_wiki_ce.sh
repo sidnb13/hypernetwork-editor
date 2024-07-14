@@ -1,7 +1,6 @@
 #!/bin/bash
 
 python3 main.py \
-    --multirun \
     mode=train \
     task=wikipedia \
     exp_name=wikipedia-full \
@@ -11,11 +10,11 @@ python3 main.py \
     ++model.compute_position_ids=false \
     ++model.use_ghost_token=false \
     ++model.chop_editor_at_layer=12 \
-    ++train.loss=ce,kl \
+    ++train.loss=ce \
     ++train.use_ddp=true \
     ++train.log_interval=10 \
-    ++train.train_batch_size=64 \
-    ++train.validation_batch_size=64 \
+    ++train.train_batch_size=128 \
+    ++train.validation_batch_size=128 \
     ++train.eval_interval=500 \
     ++train.save_interval=10000 \
     ++train.do_save=true \
