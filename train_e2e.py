@@ -185,11 +185,13 @@ def train(
             updates += 1
 
             l0, l1 = compute_l0_l1_norms(out.edit_vectors)
+            ppl = compute_perplexity(train_batch, out)
 
             batch_metrics = {
                 "loss/train": loss.detach().item()
                 if loss.dim() == 0
                 else loss.detach().mean().item(),
+                "loss/ppl": ppl,
                 "penalty/train": penalty_loss.detach().item(),
                 "train_metrics/l1": l1,
                 "train_metrics/l0": l0,
@@ -298,6 +300,7 @@ def evaluate(
 
     l0, l1 = compute_l0_l1_norms(out.edit_vectors)
 
+    batch_metrics["val/ppl"] = compute_perplexity(val_batch, out)
     batch_metrics["val_metrics/l1"] = l1
     batch_metrics["val_metrics/l0"] = l0
     batch_metrics["loss/penalty"] = penalty_loss.detach().item()
@@ -474,6 +477,25 @@ def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int 
     per_datapoint_penalty_loss = lam * torch.sum(edit_ratio, dim=[1, 2])
 
     return per_datapoint_penalty_loss
+
+
+def compute_perplexity(batch: Dict, editor_out: EditorModelOutput):
+    loss_mask = batch["target_attention_mask"] > 0
+    labels = torch.where(loss_mask, batch["target_input_ids"], 0)
+    labels = labels[:, 1:].clone()
+    loss_mask = loss_mask[:, 1:].clone()
+    logits = editor_out.logits[:, :-1, :]
+
+    # compute ce loss
+    distribution_logps = logits.log_softmax(-1)
+    per_token_logps = torch.gather(
+        distribution_logps, dim=-1, index=labels.unsqueeze(-1)
+    ).squeeze()
+
+    ce_loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+    ce_loss = ce_loss.mean()
+
+    return ce_loss.exp()
 
 
 def compute_kl_loss(

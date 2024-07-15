@@ -14,7 +14,7 @@ from data import (
 )
 from helpers import get_nb_trainable_parameters
 from logger import get_logger
-from train_utils import train
+from train_e2e import train
 
 logger = get_logger(__name__)
 
