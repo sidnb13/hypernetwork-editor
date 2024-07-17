@@ -2,7 +2,7 @@
 
 python3 main.py \
     model=gpt2 \
-    mode=train \
+    mode=train_editor \
     task=wikipedia \
     exp_name=wikipedia-full \
     ++model.use_layerwise_embeddings=false \

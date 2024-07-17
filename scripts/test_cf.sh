@@ -1,7 +1,7 @@
 #!/bin/bash
 
 python3 main.py \
-    mode=train \
+    mode=train_editor \
     task=counterfact \
     exp_name=counterfact_full_run \
     ++task.name_or_path=assets/data/processed_counterfact_full_data \

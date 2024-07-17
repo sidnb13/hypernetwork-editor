@@ -6,3 +6,5 @@ seq_a: 192
 seq_b: 32
 seq_c: 96
 seq_d: 192
+
+is_split: false

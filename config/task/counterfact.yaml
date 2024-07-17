@@ -1,3 +1,4 @@
 name: counterfact
 editor_token_limit: 50
 name_or_path: assets/data/counterfact.json
+is_split: false

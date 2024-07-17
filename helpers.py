@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -7,6 +8,7 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer
 
@@ -15,12 +17,51 @@ from models.utils import EditorModelOutput
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+NUM2WORD = {
+    1: "first",
+    2: "second",
+    3: "third",
+    4: "fourth",
+    5: "fifth",
+    6: "sixth",
+    7: "seventh",
+    8: "eighth",
+    9: "ninth",
+    10: "tenth",
+}
+COLOR_MAP = {
+    "g": "green",
+    "b": "blue",
+    "r": "red",
+    "y": "yellow",
+    "p": "purple",
+    "o": "orange",
+}
+
 def compute_l0_l1_norms(tensor):
     # Compute L0 norm (number of non-zero elements)
     l0_norm = torch.count_nonzero(tensor).item() / tensor.numel()
     # Compute L1 norm (sum of absolute values)
     l1_norm = torch.norm(tensor, p=1).item()
     return l0_norm, l1_norm
+
+
+def setup(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = get_open_port()
+
+    # initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+def get_open_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))  # bind to all interfaces and use an OS provided port
+        return s.getsockname()[1]  # return only the port number
 
 
 def visualize_interventions(

@@ -1,3 +1,5 @@
 name: scone
-domain: alchemy
-editor_token_limit: 50
+turn_limit: 10
+domains: [alchemy, scene, tangrams]
+name_or_path: assets/data/scone/rlong
+is_split: true

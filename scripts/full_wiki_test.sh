@@ -2,7 +2,7 @@
 
 python3 main.py \
     --multirun \
-    mode=train \
+    mode=train_editor \
     task=wikipedia \
     exp_name=wikipedia-full \
     debug=false \

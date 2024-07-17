@@ -6,12 +6,14 @@ import hydra
 import torch
 import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
+from transformers import AutoModelForCausalLM
 
 import models
 from data import (
     get_dataloader,
     get_task,
 )
+from finetune_target import finetune
 from helpers import get_nb_trainable_parameters
 from logger import get_logger
 from train_e2e import train
@@ -40,24 +42,27 @@ def main(config: DictConfig):
     config_cls = getattr(models, config.model.config_cls)
     model_cls = getattr(models, config.model.model_cls)
 
-    model_config = config_cls(
-        _name_or_path=config.model.name_or_path,
-        edit_channel_multiply_factor=config.model.edit_channel_multiply_factor,
-        chop_editor_at_layer=config.model.chop_editor_at_layer,
-        num_editing_heads=config.model.num_editing_heads,
-        use_layerwise_embeddings=config.model.use_layerwise_embeddings,
-        edit_dampening_factor=config.model.edit_dampening_factor,
-        kill_token_zero=config.model.kill_token_zero,
-        use_ghost_token=config.model.use_ghost_token,
-        compute_position_ids=config.model.compute_position_ids,
-        cross_attn_layers=list(config.model.cross_attn_layers),
-        restrict_edit_to_layers=list(config.model.restrict_edit_to_layers),
-        restrict_edit_to_positions=list(config.model.restrict_edit_to_positions),
-    )
+    if config.mode == "train_editor":
+        model_config = config_cls(
+            _name_or_path=config.model.name_or_path,
+            edit_channel_multiply_factor=config.model.edit_channel_multiply_factor,
+            chop_editor_at_layer=config.model.chop_editor_at_layer,
+            num_editing_heads=config.model.num_editing_heads,
+            use_layerwise_embeddings=config.model.use_layerwise_embeddings,
+            edit_dampening_factor=config.model.edit_dampening_factor,
+            kill_token_zero=config.model.kill_token_zero,
+            use_ghost_token=config.model.use_ghost_token,
+            compute_position_ids=config.model.compute_position_ids,
+            cross_attn_layers=list(config.model.cross_attn_layers),
+            restrict_edit_to_layers=list(config.model.restrict_edit_to_layers),
+            restrict_edit_to_positions=list(config.model.restrict_edit_to_positions),
+        )
 
-    editor_model = model_cls(model_config)
+        model = model_cls(model_config)
+    elif config.mode == "finetune_sft":
+        model = AutoModelForCausalLM.from_pretrained(config.model.name_or_path)
 
-    if config.mode == "train":
+    if config.mode in ["train_editor", "finetune_sft"]:
         train_dataloader = get_dataloader(
             get_task(config, config.task.name, "train"), config, "train"
         )
@@ -69,7 +74,7 @@ def main(config: DictConfig):
             validation_dataloader = None
 
         # print trainable params
-        trainable_params, all_params = get_nb_trainable_parameters(editor_model)
+        trainable_params, all_params = get_nb_trainable_parameters(model)
         logger.info(
             f"trainable/total params: {trainable_params} / {all_params} ({100 *trainable_params/all_params:.3f}%)"
         )
@@ -79,21 +84,23 @@ def main(config: DictConfig):
         # create timestamp for use in exp_name
         config.exp_name = f"{config.exp_name}_{timestamp}"
 
+        train_fn = train if config.mode == "train_editor" else finetune
+
         if config.train.use_ddp:
             world_size = torch.cuda.device_count()
             mp.spawn(
-                train,
+                train_fn,
                 nprocs=world_size,
                 args=(
                     world_size,
                     config,
-                    editor_model,
+                    model,
                     train_dataloader,
                     validation_dataloader,
                 ),
             )
         else:
-            train(0, 1, config, editor_model, train_dataloader, validation_dataloader)
+            train_fn(0, 1, config, model, train_dataloader, validation_dataloader)
 
 
 if __name__ == "__main__":

@@ -17,8 +17,10 @@ from transformers import (
 
 import wandb
 from helpers import (
+    cleanup,
     compute_l0_l1_norms,
     concat_and_pad_ids,
+    setup,
     slice_and_move_batch_for_device,
     visualize_interventions,
 )
@@ -27,18 +29,6 @@ from models.gpt2 import GPT2Editor
 from models.utils import EditorModelOutput
 
 logger = get_logger(__name__)
-
-
-def setup(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12356"
-
-    # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-
-def cleanup():
-    dist.destroy_process_group()
 
 
 def train(

@@ -20,7 +20,7 @@ train:
   lr: 4e-4
   steps: -1
   warmup_steps: 0.1
-  epochs: 1
+  n_epochs: 1
   train_batch_size: 32
   validation_batch_size: 32
   scheduler: constant
