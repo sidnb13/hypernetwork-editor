@@ -38,6 +38,7 @@ COLOR_MAP = {
     "o": "orange",
 }
 
+
 def compute_l0_l1_norms(tensor):
     # Compute L0 norm (number of non-zero elements)
     l0_norm = torch.count_nonzero(tensor).item() / tensor.numel()
@@ -48,7 +49,7 @@ def compute_l0_l1_norms(tensor):
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = get_open_port()
+    os.environ["MASTER_PORT"] = "12345"
 
     # initialize the process group
     dist.init_process_group("nccl", rank=rank, world_size=world_size)

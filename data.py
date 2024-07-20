@@ -5,6 +5,7 @@ import inspect
 import json
 import math
 import os
+import random
 import re
 from collections import Counter, defaultdict
 from functools import partial
@@ -392,7 +393,15 @@ def load_scone(config: DictConfig):
 
         return ", ".join(map(to_nl, enumerate(tangrams)))
 
-    def sequence_to_instruction(example: dict, turn_limit: int):
+    def sequence_to_instruction(
+        example: dict,
+        min_turn_limit: int,
+        max_turn_limit: int,
+        samples_per_sequence: int,
+    ):
+        # batch size 1
+        example = {k: v[0] for k, v in example.items()}
+
         if example["task"] == "alchemy":
             nl_fn = alchemy_state_to_nl
         elif example["task"] == "tangrams":
@@ -402,32 +411,58 @@ def load_scone(config: DictConfig):
 
         limit = len([k for k in example.keys() if k.startswith("WORLD_")])
 
-        world_states = [
-            nl_fn(example[f"WORLD_{i}"]) for i in range(0, min(limit, turn_limit))
-        ]
-        utterances = [
-            example[f"UTTERANCE_{i}"] for i in range(1, min(limit, turn_limit))
-        ]
+        world_states = [nl_fn(example[f"WORLD_{i}"]) for i in range(0, limit)]
+        utterances = [example[f"UTTERANCE_{i}"] for i in range(1, limit)]
         utterances.insert(0, "")
         utterances.append("")
 
-        instructions = []
-        output = None
+        samples_per_sequence = min(
+            samples_per_sequence, max_turn_limit - min_turn_limit + 1
+        )
 
-        for i, state in enumerate(world_states):
-            utterance = utterances[i + 1]
-            if i + 1 < min(limit, turn_limit):
-                instructions.append(f"{state}\n{utterance}".strip())
-            else:
-                output = state
-                break
+        instructions, outputs = [], []
+        turn_limits = random.sample(
+            range(min_turn_limit, max_turn_limit + 1), k=samples_per_sequence
+        )
 
-        return {"instruction": "\n".join(instructions), "target": output}
+        for turn_limit in turn_limits:
+            instruction = []
+            output = None
+            for i, state in enumerate(world_states):
+                utterance = utterances[i + 1]
+                if i + 1 < min(limit, turn_limit):
+                    instruction.append(f"{state}\n{utterance}".strip())
+                else:
+                    output = state
+                    break
+
+            instructions.append("\n".join(instruction))
+            outputs.append(output)
+
+        return {
+            "instruction": instructions,
+            "target": outputs,
+            "task": [example["task"]] * len(instructions),
+        }
 
     scone_processed = scone_dataset.map(
-        partial(sequence_to_instruction, turn_limit=config.task.turn_limit),
+        partial(
+            sequence_to_instruction,
+            min_turn_limit=config.task.min_turn_limit,
+            max_turn_limit=config.task.max_turn_limit,
+            samples_per_sequence=config.task.samples_per_sequence,
+        ),
         num_proc=os.cpu_count(),
+        batched=True,
+        batch_size=1,
+        load_from_cache_file=False,
+        remove_columns=[
+            c
+            for c in scone_dataset["train"].column_names
+            if c not in ["instruction", "target", "task"]
+        ],
     )
+
     scone_filtered = scone_processed.filter(lambda x: x["task"] in config.task.domains)
 
     # tokenized
@@ -441,7 +476,6 @@ def load_scone(config: DictConfig):
             padding_side=config.data.padding_side,
         ),
         batched=True,
-        # num_proc=os.cpu_count(),
         load_from_cache_file=False,
     )
 

@@ -1,5 +1,7 @@
 name: scone
-turn_limit: 10
+min_turn_limit: 3
+max_turn_limit: 10
+samples_per_sequence: 3
 domains: [alchemy, scene, tangrams]
 name_or_path: assets/data/scone/rlong
 is_split: true

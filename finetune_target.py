@@ -227,15 +227,12 @@ def evaluate(
         val_batch,
         rank,
         world_size,
-        stop_editing_idx=config.train.stop_editing_idx,
     )
 
-    loss_reduced = (
-        loss.detach().item() if loss.dim() == 0 else loss.detach().mean().item()
-    )
+    loss_reduced = loss.detach() if loss.dim() == 0 else loss.detach().mean()
 
-    batch_metrics["val/ppl"] = loss_reduced.exp()
-    batch_metrics["loss/val"] = loss_reduced
+    batch_metrics["val/ppl"] = loss_reduced.exp().item()
+    batch_metrics["loss/val"] = loss_reduced.item()
     logger.info(batch_metrics)
 
     if wandb.run and rank == 0:
