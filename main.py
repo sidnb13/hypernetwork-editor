@@ -63,13 +63,13 @@ def main(config: DictConfig):
         model = AutoModelForCausalLM.from_pretrained(config.model.name_or_path)
 
     if config.mode in ["train_editor", "finetune_sft"]:
-        train_dataloader = get_dataloader(
-            get_task(config, config.task.name, "train"), config, "train"
-        )
+        train_dataset = get_task(config, config.task.name, "train")
+
+        train_dataloader = get_dataloader(train_dataset, config, "train")
+
         if config.train.do_eval:
-            validation_dataloader = get_dataloader(
-                get_task(config, config.task.name, "val"), config, "val"
-            )
+            validation_dataset = get_task(config, config.task.name, "val")
+            validation_dataloader = get_dataloader(validation_dataset, config, "val")
         else:
             validation_dataloader = None
 

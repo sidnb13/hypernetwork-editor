@@ -252,7 +252,7 @@ def save_model_checkpoint(
 
     model_obj = model.module if isinstance(model, DDP) else model
     state_dict = {
-        "statr": model_obj.state_dict(),
+        "state": model_obj.state_dict(),
         "step": step,
         "opt": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),

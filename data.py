@@ -15,6 +15,7 @@ import datasets
 import torch
 import torch.distributed as dist
 import transformers
+from numpy import add
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
@@ -230,25 +231,31 @@ def tokenize_sft(
 ):
     tokenized_instructions = tokenizer(
         row_batch[instruction_col],
-        add_special_tokens=True,
+        add_special_tokens=False,
         max_length=max_length,
         truncation=True,
     )
-    # strip eos token from instructions
+    # add bos token
     tokenized_instructions["input_ids"] = [
-        x[:-1] if x[-1] == tokenizer.eos_token_id else x
-        for x in tokenized_instructions["input_ids"]
+        [tokenizer.bos_token_id] + x for x in tokenized_instructions["input_ids"]
     ]
-
     tokenized_inputs = tokenizer(
         [
-            i + " " + t
+            i + "\n" + t
             for i, t in zip(row_batch[instruction_col], row_batch[target_col])
         ],
         max_length=max_length,
-        add_special_tokens=True,
+        add_special_tokens=False,
         truncation=True,
     )
+    # add bos and eos tokens
+    tokenized_inputs["input_ids"] = [
+        [tokenizer.bos_token_id] + x + [tokenizer.eos_token_id]
+        for x in tokenized_inputs["input_ids"]
+    ]
+    tokenized_inputs["attention_mask"] = [
+        [1] + x + [1] for x in tokenized_inputs["attention_mask"]
+    ]
     labels = copy.deepcopy(tokenized_inputs["input_ids"])
     for instr, lbl in zip(tokenized_instructions["input_ids"], labels):
         lbl[: len(instr)] = [-100] * len(instr)
@@ -553,18 +560,13 @@ def shuffle_and_select(
     # shuffle and take split according to seed
     dataset = dataset.shuffle(seed=seed)
 
-    if split == "train" and not do_eval:
-        if is_split:
-            return dataset["train"]
-        return dataset
-
     # get number of examples parsed from split
-    match = re.search(r"(\d+)(\%)*", split)
+    match = re.search(r"(\w+)\[\:(\d+)(\%)*\]", split)
 
     if match is None:
-        split_num_examples = None
+        split, split_num_examples = split, None
     else:
-        split_num_examples = match.group(0)
+        split, split_num_examples = match.group(1), match.group(2)
 
     # create train/test/val splits
     if not is_split:
