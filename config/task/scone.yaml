@@ -2,6 +2,7 @@ name: scone
 min_turn_limit: 3
 max_turn_limit: 10
 samples_per_sequence: 3
+editor_token_limit: 128
 mode: sft # or editor
 domains: [alchemy, scene, tangrams]
 name_or_path: assets/data/scone/rlong

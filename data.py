@@ -15,7 +15,6 @@ import datasets
 import torch
 import torch.distributed as dist
 import transformers
-from numpy import add
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
@@ -204,36 +203,51 @@ def tokenize_editor_eval(
     tokenizer=None,
     max_length=None,
     editor_token_limit=None,
-    instruction_col=None,
+    editor_input_col=None,
     target_input_col=None,
     target_col=None,
 ):
     editor_inputs = tokenizer(
-        row_batch[instruction_col],
+        row_batch[editor_input_col],
         add_special_tokens=False,
         max_length=editor_token_limit,
         padding="max_length",
         truncation=True,
     )
+
+    # Add eos token to the start of target inputs
+    target_inputs_with_eos = [
+        tokenizer.bos_token + text for text in row_batch[target_input_col]
+    ]
+
     target_inputs = tokenizer(
-        row_batch[target_input_col],
+        target_inputs_with_eos,
         max_length=max_length,
         add_special_tokens=False,
-        padding="max_length",
         truncation=True,
     )
+    # reverse, pad, unreverse
+    target_input_ids = pad(
+        target_inputs.input_ids, tokenizer.pad_token_id, max_length, "left"
+    )
+    target_attention_mask = pad(target_inputs.attention_mask, 0, max_length, "left")
+
+    # add eos token to the start of target outputs
+    target_outputs_with_eos = [
+        text + tokenizer.eos_token for text in row_batch[target_col]
+    ]
     target_outputs = tokenizer(
-        row_batch[target_col],
+        target_outputs_with_eos,
         max_length=max_length,
         add_special_tokens=False,
-        padding="max_length",
         truncation=True,
     )
 
     return {
         **{"editor_" + k: v for k, v in editor_inputs.items()},
-        **{"target_input_" + k: v for k, v in target_inputs.items()},
-        **{"target_output_" + k: v for k, v in target_outputs.items()},
+        "target_input_ids": target_input_ids,
+        "target_attention_mask": target_attention_mask,
+        "target_output": target_outputs.input_ids,
     }
 
 
@@ -264,6 +278,27 @@ def tokenize_editor(
         **{"editor_" + k: v for k, v in editor_inputs.items()},
         **{"target_" + k: v for k, v in target_inputs.items()},
     }
+
+
+def pad(x, padding_value, max_length, padding_side):
+    x = [
+        torch.tensor(torch.tensor(ids[::-1] if padding_side == "left" else ids))
+        for ids in x
+    ]
+    x[0] = torch.nn.functional.pad(
+        x[0],
+        (0, max_length - x[0].shape[-1]),
+        value=padding_value,
+    )
+    padded = pad_sequence(
+        x,
+        batch_first=True,
+        padding_value=padding_value,
+    )
+    # unreverse if left padding
+    if padding_side == "left":
+        padded = padded.flip(-1)
+    return padded
 
 
 def tokenize_sft(
@@ -305,28 +340,13 @@ def tokenize_sft(
     for instr, lbl in zip(tokenized_instructions["input_ids"], labels):
         lbl[: len(instr)] = [-100] * len(instr)
 
-    # convert to tensor lists
-    def pad(x, padding_value):
-        x = [
-            torch.tensor(torch.tensor(ids[::-1] if padding_side == "left" else ids))
-            for ids in x
-        ]
-        x[0] = torch.nn.functional.pad(
-            x[0],
-            (0, max_length - x[0].shape[-1]),
-            value=padding_value,
-        )
-        return pad_sequence(
-            x,
-            batch_first=True,
-            padding_value=padding_value,
-        )
-
     tokenized_inputs["input_ids"] = pad(
-        tokenized_inputs["input_ids"], tokenizer.pad_token_id
+        tokenized_inputs["input_ids"], tokenizer.pad_token_id, max_length, padding_side
     )
-    tokenized_inputs["attention_mask"] = pad(tokenized_inputs["attention_mask"], 0)
-    labels = pad(labels, -100)
+    tokenized_inputs["attention_mask"] = pad(
+        tokenized_inputs["attention_mask"], 0, max_length, padding_side
+    )
+    labels = pad(labels, -100, max_length, padding_side)
 
     return {
         "input_ids": tokenized_inputs["input_ids"],
@@ -552,7 +572,20 @@ def load_scone(config: DictConfig):
             load_from_cache_file=False,
         )
     else:
-        raise NotImplementedError
+        tokenized_scone = scone_filtered.map(
+            partial(
+                tokenize_editor_eval,
+                tokenizer=get_tokenizer(config.model.name_or_path),
+                max_length=config.model.max_length,
+                editor_token_limit=config.task.editor_token_limit,
+                editor_input_col="editor_context",
+                target_input_col="target_input",
+                target_col="target",
+            ),
+            batched=True,
+            batch_size=1,
+            load_from_cache_file=False,
+        )
 
     # remap splits
     tokenized_scone = datasets.DatasetDict(

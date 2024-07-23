@@ -5,7 +5,7 @@ python3 main.py \
     mode=finetune_sft \
     task=scone \
     task.domains=[alchemy] \
-    task.mode=sft \
+    task.mode=editor \
     exp_name=scone_ft \
     ++data.n_examples=128 \
     ++train.do_eval=false \
@@ -22,4 +22,3 @@ python3 main.py \
     ++train.scheduler=cosine \
     debug=false \
     ++wandb.enabled=true \
-    ++wandb.notes="fix bug in scone processing"
