@@ -31,7 +31,7 @@ NUM2WORD = {
 }
 COLOR_MAP = {
     "g": "green",
-    "b": "blue",
+    "b": "brown",
     "r": "red",
     "y": "yellow",
     "p": "purple",

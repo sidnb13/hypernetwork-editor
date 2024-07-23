@@ -166,7 +166,7 @@ def finetune(
                 if wandb.run:
                     wandb.log(batch_metrics)
 
-        if step > 0 and step % config.train.eval_interval == 0:
+        if config.train.do_eval and step > 0 and step % config.train.eval_interval == 0:
             if val_itr:
                 evaluate(
                     step,

@@ -450,7 +450,7 @@ def load_model_checkpoint(
         os.path.join(ckpt_folder, "checkpoint.pt"), map_location=torch.device(rank)
     )
     model_obj = model.module if isinstance(model, DDP) else model
-    model_obj.load_state_dict(state_dict["hypernetwork"])
+    model_obj.load_hypernetwork(state_dict["hypernetwork"])
     logger.info("Loaded model checkpoint from {}".format(ckpt_folder))
     optimizer.load_state_dict(state_dict["opt"])
     scheduler.load_state_dict(state_dict["scheduler"])

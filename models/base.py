@@ -57,11 +57,17 @@ class BaseEditor(nn.Module):
     def eval(self: T) -> T:
         return self.hypernetwork.eval()
 
-    def load_state_dict(
+    def load_hypernetwork(
         self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
     ):
         """Only load weights for the trainable hypernetwork."""
         self.hypernetwork.load_state_dict(state_dict, strict=strict, assign=assign)
+
+    def load_target_model(
+        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
+    ):
+        """Only load weights for the target model."""
+        self.target_model.load_state_dict(state_dict, strict=strict, assign=assign)
 
     @torch.no_grad()
     def _run_target_model_for_encoded_hidden_states(

@@ -59,6 +59,12 @@ def main(config: DictConfig):
         )
 
         model = model_cls(model_config)
+
+        if config.model.target_ckpt:
+            model.load_target_model(
+                torch.load(config.model.target_ckpt, map_location="cpu")["state"]
+            )
+
     elif config.mode == "finetune_sft":
         model = AutoModelForCausalLM.from_pretrained(config.model.name_or_path)
 
