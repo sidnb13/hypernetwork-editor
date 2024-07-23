@@ -5,7 +5,7 @@ python3 main.py \
     mode=train_editor \
     task=wikipedia \
     exp_name=wikipedia-full \
-    debug=false \
+    debug=true \
     ++model.use_layerwise_embeddings=false \
     ++model.num_editing_heads=6144 \
     ++model.edit_channel_multiply_factor=16 \

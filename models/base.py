@@ -184,20 +184,7 @@ class BaseEditor(nn.Module):
             target_attention_mask = ghost_present_attention_mask
 
         mask_sum = target_attention_mask.cumsum(-1)
-        mask_sum_min = mask_sum.min(dim=-1)[0]
-        edit_window_mask = (
-            torch.arange(
-                0, target_attention_mask.shape[-1], device=target_attention_mask.device
-            )
-            .unsqueeze(0)
-            .repeat(target_attention_mask.shape[0], 1)
-        )
-        edit_window_mask[mask_sum > 0] += (
-            mask_sum_min.unsqueeze(-1).repeat(1, mask_sum.shape[-1]).view(-1)
-        )
-        stop_edit_mask = torch.logical_and(
-            edit_window_mask > 0, edit_window_mask <= stop_editing_idx
-        )
+        stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
 
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
