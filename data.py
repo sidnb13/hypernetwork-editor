@@ -135,43 +135,15 @@ def load_wikipedia(config: DictConfig):
         num_proc=os.cpu_count(),
     )
 
-    def tokenize(row_batch: dict, tokenizer=None):
-        # Concatenate segments A and D for editor inputs
-        editor_text = [
-            a + " " + d for a, d in zip(row_batch["segment_a"], row_batch["segment_d"])
-        ]
-
-        # Concatenate segments B and C for target inputs
-        target_text = [
-            b + " " + c for b, c in zip(row_batch["segment_b"], row_batch["segment_c"])
-        ]
-
-        editor_inputs = tokenizer(
-            editor_text,
-            max_length=config.model.max_length,
-            add_special_tokens=False,
-            padding="max_length",
-            truncation=True,
-        )
-
-        target_inputs = tokenizer(
-            target_text,
-            add_special_tokens=False,
-            max_length=config.task.editor_token_limit,
-            padding="max_length",
-            truncation=True,
-        )
-
-        return {
-            **{"editor_" + k: v for k, v in editor_inputs.items()},
-            **{"target_" + k: v for k, v in target_inputs.items()},
-        }
-
     new_dataset = new_dataset.map(
-        tokenize,
+        tokenize_editor_pretrain,
         batched=True,
         num_proc=os.cpu_count(),
-        fn_kwargs={"tokenizer": tokenizer},
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "max_length": config.model.max_length,
+            "editor_token_limit": config.task.editor_token_limit,
+        },
     )
 
     # filter empty target sequences
@@ -192,7 +164,80 @@ def load_wikipedia(config: DictConfig):
     return new_dataset
 
 
-def tokenize(
+def tokenize_editor_pretrain(
+    row_batch: dict, tokenizer=None, max_length=None, editor_token_limit=None
+):
+    # Concatenate segments A and D for editor inputs
+    editor_text = [
+        a + " " + d for a, d in zip(row_batch["segment_a"], row_batch["segment_d"])
+    ]
+
+    # Concatenate segments B and C for target inputs
+    target_text = [
+        b + " " + c for b, c in zip(row_batch["segment_b"], row_batch["segment_c"])
+    ]
+
+    editor_inputs = tokenizer(
+        editor_text,
+        max_length=max_length,
+        add_special_tokens=False,
+        padding="max_length",
+        truncation=True,
+    )
+
+    target_inputs = tokenizer(
+        target_text,
+        add_special_tokens=False,
+        max_length=editor_token_limit,
+        padding="max_length",
+        truncation=True,
+    )
+
+    return {
+        **{"editor_" + k: v for k, v in editor_inputs.items()},
+        **{"target_" + k: v for k, v in target_inputs.items()},
+    }
+
+
+def tokenize_editor_eval(
+    row_batch: dict,
+    tokenizer=None,
+    max_length=None,
+    editor_token_limit=None,
+    instruction_col=None,
+    target_input_col=None,
+    target_col=None,
+):
+    editor_inputs = tokenizer(
+        row_batch[instruction_col],
+        add_special_tokens=False,
+        max_length=editor_token_limit,
+        padding="max_length",
+        truncation=True,
+    )
+    target_inputs = tokenizer(
+        row_batch[target_input_col],
+        max_length=max_length,
+        add_special_tokens=False,
+        padding="max_length",
+        truncation=True,
+    )
+    target_outputs = tokenizer(
+        row_batch[target_col],
+        max_length=max_length,
+        add_special_tokens=False,
+        padding="max_length",
+        truncation=True,
+    )
+
+    return {
+        **{"editor_" + k: v for k, v in editor_inputs.items()},
+        **{"target_input_" + k: v for k, v in target_inputs.items()},
+        **{"target_output_" + k: v for k, v in target_outputs.items()},
+    }
+
+
+def tokenize_editor(
     row_batch: dict,
     tokenizer=None,
     max_length=None,
@@ -428,29 +473,49 @@ def load_scone(config: DictConfig):
         )
 
         instructions, outputs = [], []
-        turn_limits = random.sample(
-            range(min_turn_limit, max_turn_limit + 1), k=samples_per_sequence
-        )
 
-        for turn_limit in turn_limits:
-            instruction = []
-            output = None
-            for i, state in enumerate(world_states):
-                utterance = utterances[i + 1]
-                if i + 1 < min(limit, turn_limit):
-                    instruction.append(f"{state}\n{utterance}".strip())
-                else:
-                    output = state
-                    break
+        if config.task.mode == "editor":
+            # Instruction = (state,utterance) pairs and output is next state
+            turn_limits = random.sample(
+                range(min_turn_limit, max_turn_limit + 1), k=samples_per_sequence
+            )
+            target_inputs = []
 
-            instructions.append("\n".join(instruction))
-            outputs.append(output)
+            for turn_limit in turn_limits:
+                instruction = []
+                target_input = None
+                output = None
+                for i, state in enumerate(world_states):
+                    utterance = utterances[i + 1]
+                    if i + 1 < min(limit, turn_limit):
+                        instruction.extend([state, utterance])
+                    else:
+                        target_input = utterances[i]
+                        instruction.pop()
+                        output = state
+                        break
 
-        return {
-            "instruction": instructions,
-            "target": outputs,
-            "task": [example["task"]] * len(instructions),
-        }
+                instructions.append("\n".join(instruction))
+                outputs.append(output)
+                target_inputs.append(target_input)
+
+            return {
+                "editor_context": instructions,
+                "target_input": target_inputs,
+                "target": outputs,
+                "task": [example["task"]] * len(instructions),
+            }
+
+        elif config.task.mode == "sft":
+            # Instruction = single utterance and output is next state
+            instructions = utterances[1:-1]
+            outputs = world_states[1:]
+
+            return {
+                "instruction": instructions,
+                "target": outputs,
+                "task": [example["task"]] * len(instructions),
+            }
 
     scone_processed = scone_dataset.map(
         partial(
@@ -459,7 +524,7 @@ def load_scone(config: DictConfig):
             max_turn_limit=config.task.max_turn_limit,
             samples_per_sequence=config.task.samples_per_sequence,
         ),
-        num_proc=os.cpu_count(),
+        num_proc=os.cpu_count() if not config.debug else 1,
         batched=True,
         batch_size=1,
         load_from_cache_file=False,
@@ -473,18 +538,21 @@ def load_scone(config: DictConfig):
     scone_filtered = scone_processed.filter(lambda x: x["task"] in config.task.domains)
 
     # tokenized
-    tokenized_scone = scone_filtered.map(
-        partial(
-            tokenize_sft,
-            tokenizer=get_tokenizer(config.model.name_or_path),
-            max_length=config.model.max_length,
-            instruction_col="instruction",
-            target_col="target",
-            padding_side=config.data.padding_side,
-        ),
-        batched=True,
-        load_from_cache_file=False,
-    )
+    if config.task.mode == "sft":
+        tokenized_scone = scone_filtered.map(
+            partial(
+                tokenize_sft,
+                tokenizer=get_tokenizer(config.model.name_or_path),
+                max_length=config.model.max_length,
+                instruction_col="instruction",
+                target_col="target",
+                padding_side=config.data.padding_side,
+            ),
+            batched=True,
+            load_from_cache_file=False,
+        )
+    else:
+        raise NotImplementedError
 
     # remap splits
     tokenized_scone = datasets.DatasetDict(
@@ -532,7 +600,7 @@ def load_counterfact(config: DictConfig):
     )
     tokenized_data = processed_data.map(
         partial(
-            tokenize,
+            tokenize_editor,
             tokenizer=tokenizer,
             max_length=config.model.max_length,
             editor_token_limit=config.task.editor_token_limit,

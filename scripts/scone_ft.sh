@@ -5,6 +5,7 @@ python3 main.py \
     mode=finetune_sft \
     task=scone \
     task.domains=[alchemy] \
+    task.mode=sft \
     exp_name=scone_ft \
     ++data.n_examples=128 \
     ++train.do_eval=false \

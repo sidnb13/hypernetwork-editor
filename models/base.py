@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, List, Mapping, Tuple, TypeVar
+from typing import Any, Callable, List, Mapping, Optional, Tuple, TypeVar
 
 import torch
 import torch.nn as nn
@@ -74,7 +74,7 @@ class BaseEditor(nn.Module):
         self,
         target_input_ids: torch.Tensor,
         target_attention_mask: torch.Tensor,
-        position_ids: torch.Tensor = None,
+        position_ids: Optional[torch.Tensor] = None,
     ):
         """Gets the hidden states from the target model, if necessary"""
 
@@ -120,18 +120,18 @@ class BaseEditor(nn.Module):
 
     def forward(
         self,
-        editor_input_ids: torch.Tensor = None,
-        editor_attention_mask: torch.Tensor = None,
-        target_input_ids: torch.Tensor = None,
-        target_attention_mask: torch.Tensor = None,
-        target_hidden_states: torch.Tensor = None,
-        target_position_ids: torch.Tensor = None,
+        editor_input_ids: Optional[torch.Tensor] = None,
+        editor_attention_mask: Optional[torch.Tensor] = None,
+        target_input_ids: Optional[torch.Tensor] = None,
+        target_attention_mask: Optional[torch.Tensor] = None,
+        target_hidden_states: Optional[torch.Tensor] = None,
+        target_position_ids: Optional[torch.Tensor] = None,
         output_target_hidden_states: bool = False,
         output_edited_hidden_states: bool = False,
         output_edit_vectors: bool = False,
         output_editor_attention: bool = False,
-        stop_editing_idx: int = None,
-        batch_edit_vectors: torch.Tensor = None,
+        stop_editing_idx: Optional[int] = None,
+        batch_edit_vectors: Optional[torch.Tensor] = None,
     ) -> EditorModelOutput:
         # Run target model for encoded hidden states
         if target_hidden_states is None:

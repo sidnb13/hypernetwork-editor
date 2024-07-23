@@ -132,7 +132,7 @@ def train(
         else:
             editor.train()
 
-        train_batch = next(train_itr)
+        train_batch = slice_and_move_batch_for_device(next(train_itr), rank, world_size)
         # compute loss
         if config.train.loss == "kl":
             loss, kl_loss, penalty_loss, out = compute_kl_loss(
@@ -268,7 +268,7 @@ def evaluate(
         "counters/val_examples": val_examples_counter,
         "counters/step": step,
     }
-    val_batch = next(val_itr)
+    val_batch = slice_and_move_batch_for_device(next(val_itr), rank, world_size)
     if config.train.loss == "kl":
         loss, kl_loss, penalty_loss, out = compute_kl_loss(
             editor,
@@ -469,6 +469,7 @@ def compute_penalty_loss(out: EditorModelOutput, lam: float, edit_stop_idx: int 
     return per_datapoint_penalty_loss
 
 
+@torch.no_grad()
 def compute_perplexity(batch: Dict, editor_out: EditorModelOutput):
     loss_mask = batch["target_attention_mask"] > 0
     labels = torch.where(loss_mask, batch["target_input_ids"], 0)
@@ -485,7 +486,11 @@ def compute_perplexity(batch: Dict, editor_out: EditorModelOutput):
     ce_loss = -(per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
     ce_loss = ce_loss.mean()
 
-    return ce_loss.exp()
+    # gather from all ranks
+    if dist.is_initialized():
+        dist.all_reduce(ce_loss, op=dist.ReduceOp.AVG)
+
+    return ce_loss.exp().item()
 
 
 def compute_kl_loss(
@@ -497,7 +502,6 @@ def compute_kl_loss(
     lam: float = 0.0,
 ):
     # run the hypernetwork
-    batch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
         **batch,
         stop_editing_idx=stop_editing_idx,
@@ -575,7 +579,6 @@ def compute_ce_loss(
     lam: float = 0.0,
 ):
     # run the hypernetwork
-    batch = slice_and_move_batch_for_device(batch, rank, world_size)
     editor_out = editor(
         **batch,
         stop_editing_idx=stop_editing_idx,

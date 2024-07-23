@@ -24,4 +24,3 @@ python3 main.py \
     ++wandb.enabled=true \
     ++wandb.group=wikipedia-pretrain-hypertuning \
     ckpt_dir=assets/checkpoints/wikipedia-pretrain-hypertuning \
-    model.target_ckpt=/home/sid/hypernetwork-editor/assets/checkpoints/scone_ft_20240723_062748/step-80/checkpoint.pt
