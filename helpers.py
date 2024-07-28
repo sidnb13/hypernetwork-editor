@@ -38,6 +38,32 @@ COLOR_MAP = {
 }
 
 
+def compute_l0_l1_norms(tensor):
+    # Compute L0 norm (number of non-zero elements)
+    l0_norm = torch.count_nonzero(tensor).item() / tensor.numel()
+    # Compute L1 norm (sum of absolute values)
+    l1_norm = torch.norm(tensor, p=1).item()
+    return l0_norm, l1_norm
+
+
+def setup(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12345"
+
+    # initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+def get_open_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))  # bind to all interfaces and use an OS provided port
+        return s.getsockname()[1]  # return only the port number
+
+
 def compute_stop_mask(target_attention_mask, stop_editing_idx):
     first_true = target_attention_mask.argmax(-1, keepdim=True)
     shifts = (target_attention_mask.shape[-1] - first_true) - stop_editing_idx
@@ -65,32 +91,6 @@ def compute_stop_mask(target_attention_mask, stop_editing_idx):
     ).bool()
 
     return stop_edit_mask
-
-
-def compute_l0_l1_norms(tensor):
-    # Compute L0 norm (number of non-zero elements)
-    l0_norm = torch.count_nonzero(tensor).item() / tensor.numel()
-    # Compute L1 norm (sum of absolute values)
-    l1_norm = torch.norm(tensor, p=1).item()
-    return l0_norm, l1_norm
-
-
-def setup(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-
-    # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-
-def cleanup():
-    dist.destroy_process_group()
-
-
-def get_open_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))  # bind to all interfaces and use an OS provided port
-        return s.getsockname()[1]  # return only the port number
 
 
 def visualize_interventions(

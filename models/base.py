@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from tracemalloc import stop
 from typing import Any, Callable, List, Mapping, Optional, Tuple, TypeVar
 
 import torch
@@ -8,8 +7,6 @@ import torch.nn as nn
 from transformers import (
     AutoModelForCausalLM,
 )
-
-from helpers import compute_stop_mask
 
 from .utils import (
     EditorConfig,
@@ -70,6 +67,7 @@ class BaseEditor(nn.Module):
         self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
     ):
         """Only load weights for the target model."""
+        # adjust keys
         self.target_model.load_state_dict(state_dict, strict=strict, assign=assign)
 
     @torch.no_grad()
@@ -197,7 +195,31 @@ class BaseEditor(nn.Module):
         if self.config.use_ghost_token:
             target_attention_mask = ghost_present_attention_mask
 
-        stop_edit_mask = compute_stop_mask(target_attention_mask, stop_editing_idx)
+        first_true = target_attention_mask.argmax(-1, keepdim=True)
+        shifts = (target_attention_mask.shape[-1] - first_true) - stop_editing_idx
+        indices = (
+            first_true
+            + shifts
+            + torch.arange(
+                stop_editing_idx, device=target_attention_mask.device
+            ).unsqueeze(0)
+        )
+
+        if target_attention_mask.dim() == 1:
+            indices = indices.squeeze()
+
+        target_attention_mask = target_attention_mask.clone().scatter_(
+            -1,
+            indices,
+            True,
+        )
+        csum = target_attention_mask.cumsum(-1)
+        stop_edit_mask = torch.where(
+            csum < stop_editing_idx,
+            target_attention_mask,
+            torch.logical_and(csum > 0, csum <= stop_editing_idx),
+        ).bool()
+
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
             target_hidden_states = (

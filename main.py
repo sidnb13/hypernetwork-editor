@@ -62,9 +62,11 @@ def main(config: DictConfig):
         model = model_cls(model_config)
 
         if config.model.target_ckpt:
-            model.load_target_model(
-                torch.load(config.model.target_ckpt, map_location="cpu")["state"]
-            )
+            target_state_dict = torch.load(
+                config.model.target_ckpt, map_location="cpu"
+            )["state"]
+            model.load_target_model(target_state_dict)
+
     elif config.mode == "finetune_sft":
         model = AutoModelForCausalLM.from_pretrained(config.model.name_or_path)
 
@@ -113,7 +115,6 @@ def main(config: DictConfig):
         else:
             train_fn(0, 1, config, model, train_dataloader, validation_dataloader)
     elif config.mode == "eval":
-        model = model_cls(model_config)
         eval_dataset = get_task(config, config.task.name, config.data.val_split_name)
         eval_dataloader = get_dataloader(
             eval_dataset, config, config.data.val_split_name
