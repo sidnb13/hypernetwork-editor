@@ -55,7 +55,7 @@ def evaluate(config, model: BaseEditor, dataloader):
                 temperature=config.eval.temperature,
             )
             input_shape = batch["target_input_ids"].shape[1]
-            generation_results = generation_results[:, :input_shape]
+            generation_results = generation_results[:, input_shape:]
 
         # decode
         decoded_generation_results = tokenizer.batch_decode(

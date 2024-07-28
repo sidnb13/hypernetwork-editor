@@ -5,7 +5,7 @@ python3 main.py \
     mode=finetune_sft \
     task=scone \
     task.domains=[alchemy] \
-    task.mode=editor \
+    task.mode=sft \
     exp_name=scone_ft \
     ++data.train_split_name=val \
     ++data.test_split_name=test \

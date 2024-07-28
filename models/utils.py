@@ -52,7 +52,7 @@ def add_fwd_hooks(module_hooks):
     try:
         handles = []
         for mod, hk in module_hooks:
-            handles.append(mod.register_forward_hook(hk))
+            handles.append(mod.register_forward_hook(hk, with_kwargs=True))
         yield
     finally:
         for h in handles:

@@ -103,13 +103,23 @@ class BaseEditor(nn.Module):
     ) -> Tuple[Callable, Callable]:
         # Run target model with edit vectors.
         # This adds the edit vectors to the given hidden state at the specified batch index, position, and layer
-        def edit_add(module, input, output):
+        # For generation, this is only run for prefill
+        def edit_add(module, args, kwargs, output):
+            if (
+                kwargs.get("past_key_values") is not None
+                or kwargs.get("layer_past") is not None
+            ):
+                return None
+
             layer_index = module.layer_index
             output[0][:] = output[0] + batch_edit_vectors[:, :, layer_index, :]
             if self.config.kill_token_zero:
                 output[0][:, 0, :] = 0
 
-        def embedding_edit_add(module, input, output):
+        def embedding_edit_add(module, args, kwargs, output):
+            if output.shape != batch_edit_vectors.shape[:2]:
+                return output
+
             output[:] = output + batch_edit_vectors[:, :, 0, :]
             if self.config.kill_token_zero:
                 output[:, 0, :] = 0
@@ -186,7 +196,7 @@ class BaseEditor(nn.Module):
 
         if self.config.use_ghost_token:
             target_attention_mask = ghost_present_attention_mask
-            
+
         stop_edit_mask = compute_stop_mask(target_attention_mask, stop_editing_idx)
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
