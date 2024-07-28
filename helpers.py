@@ -16,7 +16,6 @@ from models.utils import EditorModelOutput
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
 NUM2WORD = {
     1: "first",
     2: "second",
@@ -37,6 +36,35 @@ COLOR_MAP = {
     "p": "purple",
     "o": "orange",
 }
+
+
+def compute_stop_mask(target_attention_mask, stop_editing_idx):
+    first_true = target_attention_mask.argmax(-1, keepdim=True)
+    shifts = (target_attention_mask.shape[-1] - first_true) - stop_editing_idx
+    indices = (
+        first_true
+        + shifts
+        + torch.arange(stop_editing_idx, device=target_attention_mask.device).unsqueeze(
+            0
+        )
+    )
+
+    if target_attention_mask.dim() == 1:
+        indices = indices.squeeze()
+
+    target_attention_mask = target_attention_mask.clone().scatter_(
+        -1,
+        indices,
+        True,
+    )
+    csum = target_attention_mask.cumsum(-1)
+    stop_edit_mask = torch.where(
+        csum < stop_editing_idx,
+        target_attention_mask,
+        torch.logical_and(csum > 0, csum <= stop_editing_idx),
+    ).bool()
+
+    return stop_edit_mask
 
 
 def compute_l0_l1_norms(tensor):
@@ -111,6 +139,7 @@ def visualize_interventions(
                 ]
             )
 
+        target_attn_mask = compute_stop_mask(target_attn_mask, stopping_index)
         edit_tensor = result.edit_vectors[batch_index][target_attn_mask > 0].cpu()
         target_hidden = result.target_hidden_states[batch_index].cpu()
 

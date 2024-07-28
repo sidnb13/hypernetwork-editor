@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tracemalloc import stop
 from typing import Any, Callable, List, Mapping, Optional, Tuple, TypeVar
 
 import torch
@@ -7,6 +8,8 @@ import torch.nn as nn
 from transformers import (
     AutoModelForCausalLM,
 )
+
+from helpers import compute_stop_mask
 
 from .utils import (
     EditorConfig,
@@ -130,6 +133,7 @@ class BaseEditor(nn.Module):
         output_edited_hidden_states: bool = False,
         output_edit_vectors: bool = False,
         output_editor_attention: bool = False,
+        output_hooks: bool = False,
         stop_editing_idx: Optional[int] = None,
         batch_edit_vectors: Optional[torch.Tensor] = None,
     ) -> EditorModelOutput:
@@ -182,15 +186,13 @@ class BaseEditor(nn.Module):
 
         if self.config.use_ghost_token:
             target_attention_mask = ghost_present_attention_mask
-
-        mask_sum = target_attention_mask.cumsum(-1)
-        stop_edit_mask = torch.logical_and(mask_sum > 0, mask_sum <= stop_editing_idx)
-
+            
+        stop_edit_mask = compute_stop_mask(target_attention_mask, stop_editing_idx)
         # If we are stopping editing at stop_editing_idx, then we eliminate target_hidden_states beyond that index
         if stop_editing_idx is not None:
             target_hidden_states = (
                 target_hidden_states[stop_edit_mask]
-                .reshape(
+                .view(
                     target_hidden_states.shape[0],
                     stop_editing_idx,
                     *target_hidden_states.shape[2:],
@@ -301,4 +303,7 @@ class BaseEditor(nn.Module):
             output.edit_vectors = batch_edit_vectors
         if output_editor_attention:
             output.editor_attention = batch_editor_attention
+        if output_hooks:
+            # Useful for generation
+            output.hooks = hooks
         return output

@@ -15,6 +15,7 @@ import datasets
 import torch
 import torch.distributed as dist
 import transformers
+from click import edit
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
@@ -211,7 +212,6 @@ def tokenize_editor_eval(
         row_batch[editor_input_col],
         add_special_tokens=False,
         max_length=editor_token_limit,
-        padding="max_length",
         truncation=True,
     )
 
@@ -228,10 +228,15 @@ def tokenize_editor_eval(
     )
     # reverse, pad, unreverse
     target_input_ids = pad(
-        target_inputs.input_ids, tokenizer.pad_token_id, max_length, "left"
+        target_inputs.input_ids, tokenizer.pad_token_id, editor_token_limit, "left"
     )
-    target_attention_mask = pad(target_inputs.attention_mask, 0, max_length, "left")
-
+    target_attention_mask = pad(
+        target_inputs.attention_mask, 0, editor_token_limit, "left"
+    )
+    editor_input_ids = pad(
+        editor_inputs.input_ids, tokenizer.pad_token_id, max_length, "right"
+    )
+    editor_attention_mask = pad(editor_inputs.attention_mask, 0, max_length, "right")
     # add eos token to the start of target outputs
     target_outputs_with_eos = [
         text + tokenizer.eos_token for text in row_batch[target_col]
@@ -243,11 +248,16 @@ def tokenize_editor_eval(
         truncation=True,
     )
 
+    target_outputs.input_ids = pad(
+        target_outputs.input_ids, tokenizer.pad_token_id, max_length, "right"
+    )
+
     return {
-        **{"editor_" + k: v for k, v in editor_inputs.items()},
+        "editor_input_ids": editor_input_ids,
+        "editor_attention_mask": editor_attention_mask,
         "target_input_ids": target_input_ids,
         "target_attention_mask": target_attention_mask,
-        "target_output": target_outputs.input_ids,
+        "labels": target_outputs.input_ids,
     }
 
 

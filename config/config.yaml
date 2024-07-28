@@ -7,6 +7,7 @@ mode: train
 
 out_dir: ./assets
 ckpt_dir: ${out_dir}/checkpoints
+eval_dir: ${out_dir}/eval
 data_dir: ${out_dir}/data
 resume_ckpt: null
 
@@ -46,11 +47,22 @@ train:
   do_eval: true
 
 data:
+  train_split_name: train
+  test_split_name: test
+  val_split_name: val
   padding_side: right
   test_split: 0.1
   val_split: 0.1
   n_examples: -1
   target_generation_tokens: 128 # 50 for wiki task
+
+eval:
+  temperature: 1.0
+  top_k: 50
+  top_p: 0.9
+  max_new_tokens: 128
+  metrics: [em, f1]
+  visualize_interval: 10
 
 wandb:
   enabled: false

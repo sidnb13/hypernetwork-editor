@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -30,6 +30,7 @@ class EditorModelOutput(BaseModelOutput):
     edited_hidden_states: Optional[torch.Tensor] = None
     edit_vectors: Optional[torch.Tensor] = None
     editor_attention: Optional[torch.Tensor] = None
+    hooks: Optional[List[Tuple[nn.Module, Callable]]] = None
 
 
 class CustomIdentity(nn.Identity):

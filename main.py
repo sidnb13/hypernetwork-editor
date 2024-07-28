@@ -13,6 +13,7 @@ from data import (
     get_dataloader,
     get_task,
 )
+from eval import evaluate
 from finetune_target import finetune
 from helpers import get_nb_trainable_parameters
 from logger import get_logger
@@ -42,7 +43,7 @@ def main(config: DictConfig):
     config_cls = getattr(models, config.model.config_cls)
     model_cls = getattr(models, config.model.model_cls)
 
-    if config.mode == "train_editor":
+    if config.mode == "train_editor" or config.mode == "eval":
         model_config = config_cls(
             _name_or_path=config.model.name_or_path,
             edit_channel_multiply_factor=config.model.edit_channel_multiply_factor,
@@ -64,18 +65,22 @@ def main(config: DictConfig):
             model.load_target_model(
                 torch.load(config.model.target_ckpt, map_location="cpu")["state"]
             )
-
     elif config.mode == "finetune_sft":
         model = AutoModelForCausalLM.from_pretrained(config.model.name_or_path)
 
     if config.mode in ["train_editor", "finetune_sft"]:
-        train_dataset = get_task(config, config.task.name, "train")
-
-        train_dataloader = get_dataloader(train_dataset, config, "train")
+        train_dataset = get_task(config, config.task.name, config.data.train_split_name)
+        train_dataloader = get_dataloader(
+            train_dataset, config, config.data.train_split_name
+        )
 
         if config.train.do_eval:
-            validation_dataset = get_task(config, config.task.name, "val")
-            validation_dataloader = get_dataloader(validation_dataset, config, "val")
+            validation_dataset = get_task(
+                config, config.task.name, config.data.val_split_name
+            )
+            validation_dataloader = get_dataloader(
+                validation_dataset, config, config.data.val_split_name
+            )
         else:
             validation_dataloader = None
 
@@ -107,6 +112,13 @@ def main(config: DictConfig):
             )
         else:
             train_fn(0, 1, config, model, train_dataloader, validation_dataloader)
+    elif config.mode == "eval":
+        model = model_cls(model_config)
+        eval_dataset = get_task(config, config.task.name, config.data.val_split_name)
+        eval_dataloader = get_dataloader(
+            eval_dataset, config, config.data.val_split_name
+        )
+        evaluate(config, model, eval_dataloader)
 
 
 if __name__ == "__main__":
