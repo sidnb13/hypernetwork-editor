@@ -39,7 +39,7 @@ class CustomIdentity(nn.Identity):
 
 
 @contextlib.contextmanager
-def add_fwd_hooks(module_hooks):
+def add_fwd_hooks(module_hooks, enable=True):
     """
     Context manager for temporarily adding forward hooks to a model.
 
@@ -49,14 +49,17 @@ def add_fwd_hooks(module_hooks):
         A list of pairs: (module, fnc) The function will be registered as a
             forward hook on the module
     """
-    try:
-        handles = []
-        for mod, hk in module_hooks:
-            handles.append(mod.register_forward_hook(hk, with_kwargs=True))
+    if enable:
+        try:
+            handles = []
+            for mod, hk in module_hooks:
+                handles.append(mod.register_forward_hook(hk, with_kwargs=True))
+            yield
+        finally:
+            for h in handles:
+                h.remove()
+    else:
         yield
-    finally:
-        for h in handles:
-            h.remove()
 
 
 def assign_layer_indices(model):

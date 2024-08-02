@@ -63,6 +63,7 @@ eval:
   max_new_tokens: 128
   metrics: [em, f1]
   visualize_interval: 10
+  enable_editor: true
 
 wandb:
   enabled: false

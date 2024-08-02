@@ -6,7 +6,6 @@ python3 main.py \
     task.domains=[alchemy] \
     task.mode=editor \
     exp_name=scone_ft \
-    model.target_ckpt="/home/sid/hypernetwork-editor/assets/checkpoints/scone_ft_20240728_172534/step-40/checkpoint.pt" \
     ++data.train_split_name=val \
     ++data.test_split_name=test \
     ++data.n_examples=128 \
@@ -14,4 +13,6 @@ python3 main.py \
     ++train.use_ddp=false \
     ++train.log_interval=1 \
     ++train.train_batch_size=8 \
-    ++train.validation_batch_size=8
+    ++train.validation_batch_size=8 \
+    eval.enable_editor=true \
+    model.target_ckpt="/home/sid/hypernetwork-editor/assets/checkpoints/scone_ft_20240728_172534/step-40/checkpoint.pt" \
