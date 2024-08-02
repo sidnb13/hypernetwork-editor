@@ -4,7 +4,6 @@ import os
 from collections import defaultdict
 from contextlib import nullcontext
 
-import attr
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
