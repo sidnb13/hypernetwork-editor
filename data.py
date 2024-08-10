@@ -291,10 +291,7 @@ def tokenize_editor(
 
 
 def pad(x, padding_value, max_length, padding_side):
-    x = [
-        torch.tensor(torch.tensor(ids[::-1] if padding_side == "left" else ids))
-        for ids in x
-    ]
+    x = [torch.tensor(ids[::-1] if padding_side == "left" else ids) for ids in x]
     x[0] = torch.nn.functional.pad(
         x[0],
         (0, max_length - x[0].shape[-1]),

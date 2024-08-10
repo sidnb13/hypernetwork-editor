@@ -115,6 +115,12 @@ def main(config: DictConfig):
         else:
             train_fn(0, 1, config, model, train_dataloader, validation_dataloader)
     elif config.mode == "eval":
+        if config.data.padding_side == "right":
+            logger.warning(
+                "You are using right padding, which is not supported for evaluation. "
+                "Switching to left padding."
+            )
+            config.data.padding_side = "left"
         eval_dataset = get_task(config, config.task.name, config.data.val_split_name)
         eval_dataloader = get_dataloader(
             eval_dataset, config, config.data.val_split_name

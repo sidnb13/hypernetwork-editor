@@ -24,6 +24,7 @@ def evaluate(config, model: BaseEditor, dataloader):
     summary_metrics = defaultdict(list)
     tokenizer = AutoTokenizer.from_pretrained(config.model.name_or_path)
     tokenizer.pad_token_id = tokenizer.eos_token_id
+    model.target_model.generation_config.pad_token_id = tokenizer.pad_token_id
     for eval_step, batch in enumerate(tqdm(dataloader)):
         batch = slice_and_move_batch_for_device(batch, 0, 1)
         if config.eval.enable_editor:
@@ -76,6 +77,7 @@ def evaluate(config, model: BaseEditor, dataloader):
             else:
                 target_input_ids = batch["target_input_ids"]
                 target_attention_mask = batch["target_attention_mask"]
+
             generation_results = model.target_model.generate(
                 input_ids=target_input_ids,
                 attention_mask=target_attention_mask,
@@ -121,14 +123,11 @@ def evaluate(config, model: BaseEditor, dataloader):
 
 
 def concat_and_left_pad(tensor1, mask1, tensor2, mask2, pad_value=0):
-    lengths1 = mask1.sum(dim=1)
-    lengths2 = mask2.sum(dim=1)
     concatenated = [
-        torch.cat([t1[:l1], t2[:l2]])
-        for t1, l1, t2, l2 in zip(tensor1, lengths1, tensor2, lengths2)
+        torch.cat([t1[m1 > 0], t2[m2 > 0]]).flip(-1)
+        for t1, m1, t2, m2 in zip(tensor1, mask1, tensor2, mask2)
     ]
-    flipped = [t.flip(0) for t in concatenated]
-    padded = pad_sequence(flipped, batch_first=True, padding_value=pad_value)
+    padded = pad_sequence(concatenated, batch_first=True, padding_value=pad_value)
     result = padded.flip(1)
     return result
 
@@ -137,8 +136,13 @@ def compute_f1(prediction_tokens, ground_truth_tokens):
     """
     Compute F1 score between prediction and ground truth tokens.
     """
+    prediction_tokens = prediction_tokens.strip()
+    ground_truth_tokens = ground_truth_tokens.strip()
     prediction_set = set(prediction_tokens)
     ground_truth_set = set(ground_truth_tokens)
+
+    if not ground_truth_set or not prediction_set:
+        return 0.0
 
     intersection = prediction_set.intersection(ground_truth_set)
     precision_score = len(intersection) / len(prediction_set)
@@ -155,8 +159,14 @@ def compute_recall(prediction_tokens, ground_truth_tokens):
     """
     Compute recall score between prediction and ground truth tokens.
     """
+    prediction_tokens = prediction_tokens.strip()
+    ground_truth_tokens = ground_truth_tokens.strip()
     prediction_set = set(prediction_tokens)
     ground_truth_set = set(ground_truth_tokens)
+
+    if not ground_truth_set:
+        return 0.0
+
     intersection = prediction_set.intersection(ground_truth_set)
     recall_score = len(intersection) / len(ground_truth_set)
     return recall_score
@@ -166,6 +176,8 @@ def compute_exact_match(prediction_tokens, ground_truth_tokens):
     """
     Compute exact match score between prediction and ground truth tokens.
     """
+    prediction_tokens = prediction_tokens.strip()
+    ground_truth_tokens = ground_truth_tokens.strip()
     if prediction_tokens == ground_truth_tokens:
         return 1.0
     else:
